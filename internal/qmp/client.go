@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -461,15 +462,24 @@ func (q *Client) SendString(text string, delay time.Duration) error {
 }
 
 // ScreenDump takes a screenshot and saves it as a PPM file
-func (q *Client) ScreenDump(filename string) error {
-	// Create a temporary file for the screenshot
-	tempFile, err := os.CreateTemp("", "qmp-screenshot-*.ppm")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %v", err)
+func (q *Client) ScreenDump(filename string, remoteTempPath string) error {
+	// Determine the path to use for the screenshot
+	tempPath := ""
+	if remoteTempPath != "" {
+		// Use the provided remote path
+		tempPath = remoteTempPath
+		logging.Debug("Using remote temporary path for screenshot", "path", tempPath)
+	} else {
+		// Create a temporary file for the screenshot
+		tempFile, err := os.CreateTemp("", "qmp-screenshot-*.ppm")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary file: %v", err)
+		}
+		tempPath = tempFile.Name()
+		defer os.Remove(tempPath)
+		tempFile.Close()
+		logging.Debug("Created local temporary file for screenshot", "path", tempPath)
 	}
-	tempPath := tempFile.Name()
-	defer os.Remove(tempPath)
-	tempFile.Close()
 
 	cmd := Command{
 		Execute: "screendump",
@@ -498,40 +508,61 @@ func (q *Client) ScreenDump(filename string) error {
 		return fmt.Errorf("QMP error: %s: %s", resp.Error.Class, resp.Error.Desc)
 	}
 
-	// Move the temporary file to the destination
-	if err := os.Rename(tempPath, filename); err != nil {
-		return fmt.Errorf("failed to save screenshot: %v", err)
+	// If using a remote path, we can't copy the file locally
+	if remoteTempPath != "" {
+		logging.Info("Screenshot saved on remote server", "path", remoteTempPath)
+		logging.Info("You'll need to manually copy the file from the remote server")
+		return nil
+	}
+
+	// Copy the temporary file to the destination
+	srcFile, err := os.Open(tempPath)
+	if err != nil {
+		return fmt.Errorf("failed to open temporary file: %v", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %v", err)
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return fmt.Errorf("failed to copy screenshot: %v", err)
 	}
 
 	return nil
 }
 
 // ScreenDumpAndConvert takes a screenshot and converts it to PNG
-func (q *Client) ScreenDumpAndConvert(outputPath string) error {
-	// Create a temporary file for the PPM
-	tempPPM, err := os.CreateTemp("", "qmp-screenshot-*.ppm")
+func (q *Client) ScreenDumpAndConvert(filename string, remoteTempPath string) error {
+	// For remote paths, we can't do the conversion locally
+	if remoteTempPath != "" {
+		logging.Info("When using a remote temporary path, only PPM format is supported")
+		logging.Info("You'll need to manually convert the file on the remote server")
+		return q.ScreenDump(filename, remoteTempPath)
+	}
+
+	// Create a temporary file for the PPM screenshot
+	tempFile, err := os.CreateTemp("", "qmp-screenshot-*.ppm")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary file: %v", err)
 	}
-	tempPPMPath := tempPPM.Name()
-	tempPPM.Close()
-	defer os.Remove(tempPPMPath)
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
+	tempFile.Close()
 
-	// Take the screenshot
-	if err := q.ScreenDump(tempPPMPath); err != nil {
+	// Take the screenshot in PPM format
+	if err := q.ScreenDump(tempPath, ""); err != nil {
 		return err
 	}
 
-	// Check if ImageMagick's convert is available
-	_, err = exec.LookPath("convert")
-	if err == nil {
-		// Convert PPM to PNG using ImageMagick
-		cmd := exec.Command("convert", tempPPMPath, outputPath)
-		if err := cmd.Run(); err == nil {
-			return nil
-		}
+	// Convert PPM to PNG using ImageMagick
+	cmd := exec.Command("convert", tempPath, filename)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to convert screenshot to PNG (is ImageMagick installed?): %v", err)
 	}
 
-	// If convert is not available or fails, just copy the PPM file
-	return os.Rename(tempPPMPath, outputPath)
+	return nil
 }
