@@ -10,6 +10,7 @@ import (
 	"github.com/jstein/qmp/internal/logging"
 	"github.com/jstein/qmp/internal/qmp"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -56,6 +57,10 @@ Example:
 		}
 		defer client.Close()
 
+		// Get the key delay from flag or config
+		delay := getScriptDelay()
+		logging.Debug("Using key delay for script", "delay", delay)
+
 		// Process the script line by line
 		scanner := bufio.NewScanner(file)
 		lineNum := 0
@@ -97,7 +102,7 @@ Example:
 
 			// Regular line - send as keyboard input
 			logging.Info("Executing line", "line", line)
-			if err := client.SendString(line, scriptDelay); err != nil {
+			if err := client.SendString(line, delay); err != nil {
 				fmt.Printf("Line %d: Error sending text: %v\n", lineNum, err)
 				continue
 			}
@@ -121,7 +126,27 @@ Example:
 	},
 }
 
+// getScriptDelay determines the key delay to use based on flag or config
+func getScriptDelay() time.Duration {
+	// Priority 1: Command line flag
+	if scriptDelay > 0 {
+		return scriptDelay
+	}
+
+	// Priority 2: Config file
+	if viper.IsSet("keyboard.delay") {
+		// Use the same delay setting as keyboard by default
+		return time.Duration(viper.GetInt("keyboard.delay")) * time.Millisecond
+	}
+
+	// Default to 50ms
+	return 50 * time.Millisecond
+}
+
 func init() {
 	rootCmd.AddCommand(scriptCmd)
-	scriptCmd.Flags().DurationVarP(&scriptDelay, "delay", "l", 50*time.Millisecond, "delay between key presses")
+	scriptCmd.Flags().DurationVarP(&scriptDelay, "delay", "l", 0, "delay between key presses (default 50ms)")
+
+	// Bind flags to viper
+	viper.BindPFlag("script.delay", scriptCmd.Flags().Lookup("delay"))
 }
