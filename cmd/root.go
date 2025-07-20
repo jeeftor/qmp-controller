@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jstein/qmp/internal/logging"
+	"github.com/jeeftor/qmp/internal/logging"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

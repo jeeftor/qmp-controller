@@ -67,8 +67,8 @@ func (h *ColorTextHandler) Handle(ctx context.Context, r slog.Record) error {
 		return true
 	})
 
-	// Write the log line
-	_, err := io.WriteString(h.w, levelText+" "+msg+attrs+"\n")
+	// Write the log line with a carriage return at the beginning to ensure clean output
+	_, err := fmt.Fprintf(h.w, "\r%s %s%s\n", levelText, msg, attrs)
 	return err
 }
 
@@ -156,13 +156,26 @@ func Error(msg string, args ...any) {
 
 // LogCommand logs a QMP command with pretty formatting
 func LogCommand(cmd string, args interface{}) {
-	Debug("Sending QMP command",
-		"command", commandColor(cmd),
-		"args", args)
+	if !debugEnabled {
+		return
+	}
+
+	// Print a carriage return first to ensure clean line
+	fmt.Print("\r")
+	if args != nil {
+		Debug("Sending QMP command", "command", cmd, "args", args)
+	} else {
+		Debug("Sending QMP command", "command", cmd)
+	}
 }
 
 // LogResponse logs a QMP response with pretty formatting
 func LogResponse(resp interface{}) {
-	Debug("Received QMP response",
-		"response", resp)
+	if !debugEnabled {
+		return
+	}
+
+	// Print a carriage return first to ensure clean line
+	fmt.Print("\r")
+	Debug("Received QMP response", "response", resp)
 }

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jstein/qmp/internal/logging"
-	"github.com/jstein/qmp/internal/qmp"
+	"github.com/jeeftor/qmp/internal/logging"
+	"github.com/jeeftor/qmp/internal/qmp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

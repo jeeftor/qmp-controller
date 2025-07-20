@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jstein/qmp/internal/logging"
+	"github.com/jeeftor/qmp/internal/logging"
 )
 
 // Client represents a QMP client connection
@@ -342,6 +342,28 @@ func (q *Client) SendKey(key string) error {
 		"space":     "spc",
 		"esc":       "esc",
 		"delete":    "delete",
+		":":         "shift_r-semicolon", // Colon is shift+semicolon
+		";":         "semicolon",
+		"!":         "shift_r-1",
+		"@":         "shift_r-2",
+		"#":         "shift_r-3",
+		"$":         "shift_r-4",
+		"%":         "shift_r-5",
+		"^":         "shift_r-6",
+		"&":         "shift_r-7",
+		"*":         "shift_r-8",
+		"(":         "shift_r-9",
+		")":         "shift_r-0",
+		"_":         "shift_r-minus",
+		"+":         "shift_r-equal",
+		"{":         "shift_r-bracketleft",
+		"}":         "shift_r-bracketright",
+		"|":         "shift_r-backslash",
+		"\"":        "shift_r-apostrophe",
+		"<":         "shift_r-comma",
+		">":         "shift_r-dot",
+		"?":         "shift_r-slash",
+		"~":         "shift_r-grave_accent",
 	}
 
 	// Check if the key is in our map
@@ -390,9 +412,54 @@ func (q *Client) SendKey(key string) error {
 				// For lowercase and other characters, use as-is
 				qemuKey = key
 			}
+		} else if strings.HasPrefix(key, "ctrl-") {
+			// Handle ctrl key combinations
+			qemuKey = key
+		} else if strings.HasPrefix(key, "shift-") {
+			// Handle shift key combinations
+			qemuKey = "shift_r-" + key[6:]
 		} else {
 			// For multi-character keys not in our map, use as-is
 			qemuKey = key
+		}
+	}
+
+	// For keys that contain a hyphen (like shift_r-semicolon), we need to send multiple keys
+	if strings.Contains(qemuKey, "-") {
+		parts := strings.Split(qemuKey, "-")
+		if len(parts) == 2 {
+			// First press the modifier key
+			modifierCmd := Command{
+				Execute: "send-key",
+				Arguments: map[string]interface{}{
+					"keys": []map[string]string{
+						{"type": "qcode", "data": parts[0]},
+					},
+				},
+			}
+
+			modifierData, err := json.Marshal(modifierCmd)
+			if err != nil {
+				return err
+			}
+
+			logging.LogCommand("send-key", modifierCmd.Arguments)
+			if _, err := q.conn.Write(modifierData); err != nil {
+				return err
+			}
+
+			var modifierResp Response
+			if err := q.readJSON(&modifierResp); err != nil {
+				return err
+			}
+			logging.LogResponse(modifierResp)
+
+			if modifierResp.Error != nil {
+				return fmt.Errorf("QMP error: %s: %s", modifierResp.Error.Class, modifierResp.Error.Desc)
+			}
+
+			// Then send the key
+			qemuKey = parts[1]
 		}
 	}
 

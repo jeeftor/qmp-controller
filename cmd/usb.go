@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jstein/qmp/internal/qmp"
+	"github.com/jeeftor/qmp/internal/qmp"
 	"github.com/spf13/cobra"
 )
 
