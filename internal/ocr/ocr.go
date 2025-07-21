@@ -665,15 +665,18 @@ func FormatBitmapAsHex(bitmap *CharacterBitmap) string {
 	hexStr.WriteString("0x")
 
 	for y := 0; y < bitmap.Height; y++ {
+		var rowValue uint32
+
+		// Convert row to binary
 		for x := 0; x < bitmap.Width; x++ {
-			if y < len(bitmap.Data) && x < len(bitmap.Data[y]) {
-				if bitmap.Data[y][x] {
-					hexStr.WriteString("F")
-				} else {
-					hexStr.WriteString("0")
-				}
+			if y < len(bitmap.Data) && x < len(bitmap.Data[y]) && bitmap.Data[y][x] {
+				// Set bit if pixel is on
+				rowValue |= 1 << (bitmap.Width - 1 - x)
 			}
 		}
+
+		// Format as hex without 0x prefix
+		hexStr.WriteString(fmt.Sprintf("%0*X", (bitmap.Width+3)/4, rowValue))
 	}
 
 	return hexStr.String()

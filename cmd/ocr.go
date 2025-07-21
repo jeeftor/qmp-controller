@@ -9,6 +9,7 @@ import (
 	"github.com/jeeftor/qmp/internal/logging"
 	"github.com/jeeftor/qmp/internal/ocr"
 	"github.com/jeeftor/qmp/internal/qmp"
+	"github.com/jeeftor/qmp/internal/render"
 	"github.com/spf13/cobra"
 	_ "github.com/spf13/viper"
 )
@@ -162,7 +163,7 @@ Examples:
 		if debugMode {
 			output = formatDebugOutput(result, tmpFile.Name())
 		} else if ansiMode {
-			output = formatAnsiOutput(result)
+			output = formatOutput(result, true, colorMode)
 		} else if singleChar {
 			output = formatSingleCharOutput(result, charRow, charCol)
 		} else {
@@ -281,6 +282,12 @@ Examples:
 				if err := ocr.RecognizeCharacters(result, trainingData); err != nil {
 					fmt.Fprintf(os.Stderr, "Error recognizing characters: %v\n", err)
 				}
+
+				// For single-char mode, we need to update the Char field directly
+				// since RecognizeCharacters only updates the Text field
+				if len(result.CharBitmaps) > 0 && len(result.Text) > 0 && len(result.Text[0]) > 0 {
+					result.CharBitmaps[0].Char = string(result.Text[0][0])
+				}
 			}
 
 			// Format the output
@@ -327,7 +334,7 @@ Examples:
 		if debugMode {
 			output = formatDebugOutput(result, inputFile)
 		} else if ansiMode {
-			output = formatAnsiOutput(result)
+			output = formatOutput(result, true, colorMode)
 		} else {
 			output = formatTextOutput(result)
 		}
@@ -458,59 +465,33 @@ func formatDebugOutput(result *ocr.OCRResult, screenshotPath string) string {
 	return sb.String()
 }
 
-func formatAnsiOutput(result *ocr.OCRResult) string {
+func formatOutput(result *ocr.OCRResult, ansiMode, colorMode bool) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("OCR Result (%dx%d) with ANSI visualization:\n\n", result.Width, result.Height))
 
-	// Print recognized text
-	for _, line := range result.Text {
-		sb.WriteString(line)
-		sb.WriteString("\n")
+	if result == nil {
+		return "Error: No OCR result available"
 	}
 
-	sb.WriteString("\nCharacter Bitmaps:\n\n")
+	sb.WriteString(fmt.Sprintf("OCR Result (%dx%d) with ANSI visualization:\n\n", result.Width, result.Height))
 
 	// Process each character bitmap
 	for i, bitmap := range result.CharBitmaps {
+		// Calculate row and column
 		row := i / result.Width
 		col := i % result.Width
 
-		// Print character information
 		if bitmap.Char != "" {
 			sb.WriteString(fmt.Sprintf("\nCharacter '%s' at position (%d,%d):\n", bitmap.Char, row, col))
 		} else {
 			sb.WriteString(fmt.Sprintf("\nUNRECOGNIZED CHARACTER at position (%d,%d):\n", row, col))
-			// Add hex representation of the bitmap
-			sb.WriteString(formatBitmapAsHex(&bitmap))
-			sb.WriteString("\n")
 		}
 
-		// Print the bitmap using ANSI escape sequences
-		for bitmapY := 0; bitmapY < bitmap.Height; bitmapY++ {
-			for bitmapX := 0; bitmapX < bitmap.Width; bitmapX++ {
-				if bitmapY < len(bitmap.Data) && bitmapX < len(bitmap.Data[bitmapY]) {
-					if bitmap.Data[bitmapY][bitmapX] {
-						if colorMode && bitmapY < len(bitmap.Colors) && bitmapX < len(bitmap.Colors[bitmapY]) && bitmap.Colors[bitmapY][bitmapX] != nil {
-							// Use original color if color mode is enabled
-							r, g, b, _ := bitmap.Colors[bitmapY][bitmapX].RGBA()
-							// Convert 16-bit color to 8-bit
-							r8 := uint8(r >> 8)
-							g8 := uint8(g >> 8)
-							b8 := uint8(b >> 8)
-							// Use true color ANSI escape sequence
-							sb.WriteString(fmt.Sprintf("\033[48;2;%d;%d;%dm  ", r8, g8, b8))
-						} else {
-							// Character pixel - use ANSI escape sequence for white background (double width)
-							sb.WriteString("\033[47m  ")
-						}
-					} else {
-						// Empty space - use ANSI escape sequence for black background (double width)
-						sb.WriteString("\033[40m  ")
-					}
-				}
-			}
-			// Reset color at end of line
-			sb.WriteString("\033[0m\n")
+		// Add the formatted bitmap output
+		if ansiMode {
+			sb.WriteString(render.FormatBitmapOutput(&bitmap, true, colorMode))
+		} else {
+			// If ansiMode is not enabled, only print the hex representation
+			sb.WriteString(fmt.Sprintf("Hex bitmap: %s\n", render.FormatBitmapAsHex(&bitmap)))
 		}
 	}
 
@@ -520,13 +501,11 @@ func formatAnsiOutput(result *ocr.OCRResult) string {
 func formatSingleCharOutput(result *ocr.OCRResult, row, col int) string {
 	var sb strings.Builder
 
-	// Check if the requested character is within bounds
-	if row < 0 || row >= result.Height || col < 0 || col >= result.Width {
-		return fmt.Sprintf("Error: Character position (%d,%d) is out of bounds for a %dx%d grid",
-			row, col, result.Height, result.Width)
+	if result == nil || len(result.CharBitmaps) == 0 {
+		return "Error: No OCR result available"
 	}
 
-	charIndex := row*result.Width + col
+	charIndex := 0 // In single-char mode, we only have one character at index 0
 	if charIndex >= len(result.CharBitmaps) {
 		return fmt.Sprintf("Error: No bitmap available for character at position (%d,%d)", row, col)
 	}
@@ -536,11 +515,11 @@ func formatSingleCharOutput(result *ocr.OCRResult, row, col int) string {
 	// If ansiMode is not enabled, only print the hex representation
 	if !ansiMode {
 		if bitmap.Char != "" {
-			return fmt.Sprintf("Character '%s' at position (%d,%d):\n%s",
-				bitmap.Char, row, col, formatBitmapAsHex(&bitmap))
+			return fmt.Sprintf("Character '%s' at position (%d,%d): %s",
+				bitmap.Char, row, col, render.FormatBitmapAsHex(&bitmap))
 		} else {
-			return fmt.Sprintf("UNRECOGNIZED CHARACTER at position (%d,%d):\n%s",
-				row, col, formatBitmapAsHex(&bitmap))
+			return fmt.Sprintf("UNRECOGNIZED CHARACTER at position (%d,%d): %s",
+				row, col, render.FormatBitmapAsHex(&bitmap))
 		}
 	}
 
@@ -548,65 +527,13 @@ func formatSingleCharOutput(result *ocr.OCRResult, row, col int) string {
 	if bitmap.Char != "" {
 		sb.WriteString(fmt.Sprintf("Character '%s' at position (%d,%d):\n\n", bitmap.Char, row, col))
 	} else {
-		sb.WriteString(fmt.Sprintf("UNRECOGNIZED CHARACTER at position (%d,%d):\n", row, col))
-		// Add hex representation of the bitmap
-		sb.WriteString(formatBitmapAsHex(&bitmap))
-		sb.WriteString("\n\n")
+		sb.WriteString(fmt.Sprintf("UNRECOGNIZED CHARACTER at position (%d,%d):\n\n", row, col))
 	}
 
-	// Print the bitmap using ANSI escape sequences
-	for bitmapY := 0; bitmapY < bitmap.Height; bitmapY++ {
-		for bitmapX := 0; bitmapX < bitmap.Width; bitmapX++ {
-			if bitmapY < len(bitmap.Data) && bitmapX < len(bitmap.Data[bitmapY]) {
-				if bitmap.Data[bitmapY][bitmapX] {
-					if colorMode && bitmapY < len(bitmap.Colors) && bitmapX < len(bitmap.Colors[bitmapY]) && bitmap.Colors[bitmapY][bitmapX] != nil {
-						// Use original color if color mode is enabled
-						r, g, b, _ := bitmap.Colors[bitmapY][bitmapX].RGBA()
-						// Convert 16-bit color to 8-bit
-						r8 := uint8(r >> 8)
-						g8 := uint8(g >> 8)
-						b8 := uint8(b >> 8)
-						// Use true color ANSI escape sequence
-						sb.WriteString(fmt.Sprintf("\033[48;2;%d;%d;%dm  ", r8, g8, b8))
-					} else {
-						// Character pixel - use ANSI escape sequence for white background (double width)
-						sb.WriteString("\033[47m  ")
-					}
-				} else {
-					// Empty space - use ANSI escape sequence for black background (double width)
-					sb.WriteString("\033[40m  ")
-				}
-			}
-		}
-		// Reset color at end of line
-		sb.WriteString("\033[0m\n")
-	}
+	// Add the formatted bitmap output
+	sb.WriteString(render.FormatBitmapOutput(&bitmap, true, colorMode))
 
 	return sb.String()
-}
-
-// formatBitmapAsHex converts a bitmap to a hex representation
-func formatBitmapAsHex(bitmap *ocr.CharacterBitmap) string {
-	var hexString strings.Builder
-	hexString.WriteString("Hex bitmap: 0x")
-
-	// Process each row and combine into a single hex string
-	for y := 0; y < bitmap.Height; y++ {
-		var rowValue uint32
-
-		// Convert row to binary
-		for x := 0; x < bitmap.Width; x++ {
-			if x < len(bitmap.Data[y]) && bitmap.Data[y][x] {
-				// Set bit if pixel is on
-				rowValue |= 1 << (bitmap.Width - 1 - x)
-			}
-		}
-
-		// Format as hex without 0x prefix
-		hexString.WriteString(fmt.Sprintf("%0*X", (bitmap.Width+3)/4, rowValue))
-	}
-
-	return hexString.String()
 }
 
 func init() {

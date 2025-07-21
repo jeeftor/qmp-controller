@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/jeeftor/qmp/internal/ocr"
+	"github.com/jeeftor/qmp/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -194,7 +195,7 @@ Examples:
 					}
 
 					// Generate hex key for this bitmap
-					hexKey := ocr.FormatBitmapAsHex(&bitmap)
+					hexKey := render.FormatBitmapAsHex(&bitmap)
 
 					// Check if we've already seen this bitmap pattern in this session
 					if existingChar, found := seenBitmaps[hexKey]; found {
@@ -208,26 +209,14 @@ Examples:
 					}
 
 					// Display the character bitmap
-					fmt.Printf("\nUnrecognized character at position (%d,%d):\n", row, col)
-					fmt.Printf("Hex bitmap: %s\n\n", ocr.FormatBitmapAsHex(&bitmap))
+					fmt.Printf("\nCharacter at position (%d,%d):\n", row, col)
+					fmt.Printf("Hex bitmap: %s\n\n", render.FormatBitmapAsHex(&bitmap))
 
 					// Print ANSI representation
-					for bitmapY := 0; bitmapY < bitmap.Height; bitmapY++ {
-						for bitmapX := 0; bitmapX < bitmap.Width; bitmapX++ {
-							if bitmapY < len(bitmap.Data) && bitmapX < len(bitmap.Data[bitmapY]) {
-								if bitmap.Data[bitmapY][bitmapX] {
-									// Character pixel - use ANSI escape sequence for white background (double width)
-									fmt.Print("\033[47m  ")
-								} else {
-									// Empty space - use ANSI escape sequence for black background (double width)
-									fmt.Print("\033[40m  ")
-								}
-							}
-						}
-						// Reset color at end of line
-						fmt.Print("\033[0m\n")
-					}
-					fmt.Print("\033[0m\n")
+					var sb strings.Builder
+					render.RenderBitmap(&bitmap, &sb, false) // Using false for colorMode as it's not supported in training yet
+					fmt.Print(sb.String())
+					fmt.Print("\n")
 
 					// Prompt for character
 					fmt.Print("Enter character (or press Enter to skip): ")
@@ -269,7 +258,7 @@ Examples:
 					bitmap.Char = char
 
 					// Store in BitmapMap (hex string to character)
-					hexKey = ocr.FormatBitmapAsHex(&bitmap)
+					hexKey = render.FormatBitmapAsHex(&bitmap)
 					trainingData.BitmapMap[hexKey] = char
 
 					// Add to seen bitmaps to avoid duplicate prompts
