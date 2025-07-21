@@ -46,9 +46,8 @@ func ProcessScreenshot(screenshotPath string, width, height int, debug bool) (*O
 	return ProcessScreenshotWithTrainingData(screenshotPath, "", width, height, debug)
 }
 
-// ProcessScreenshotWithTrainingData processes a screenshot for OCR with optional training data
-func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, width, height int, debug bool) (*OCRResult, error) {
-	// Open the screenshot file
+// decodeImageFile opens and decodes an image file using netpbm first, then standard decoders
+func decodeImageFile(screenshotPath string) (image.Image, error) {
 	file, err := os.Open(screenshotPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open screenshot: %v", err)
@@ -65,6 +64,15 @@ func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode image: %v", err)
 		}
+	}
+	return img, nil
+}
+
+// ProcessScreenshotWithTrainingData processes a screenshot for OCR with optional training data
+func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, width, height int, debug bool) (*OCRResult, error) {
+	img, err := decodeImageFile(screenshotPath)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get image dimensions
@@ -150,23 +158,9 @@ func ProcessScreenshotWithCrop(screenshotPath string, width, height int,
 // ProcessScreenshotWithCropAndTrainingData processes a screenshot for OCR with cropping and optional training data
 func ProcessScreenshotWithCropAndTrainingData(screenshotPath, trainingDataPath string, width, height int,
 	startRow, endRow, startCol, endCol int, debug bool) (*OCRResult, error) {
-	// Open the screenshot file
-	file, err := os.Open(screenshotPath)
+	img, err := decodeImageFile(screenshotPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open screenshot: %v", err)
-	}
-	defer file.Close()
-
-	// Try to decode the image using netpbm first
-	var img image.Image
-	img, err = netpbm.Decode(file, nil)
-	if err != nil {
-		// If netpbm fails, try standard image decoders
-		file.Seek(0, 0) // Reset file pointer to beginning
-		img, _, err = image.Decode(file)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode image: %v", err)
-		}
+		return nil, err
 	}
 
 	// Get image dimensions
@@ -605,23 +599,9 @@ func resizeBitmap(bitmap CharacterBitmap, width, height int) CharacterBitmap {
 
 // ExtractSingleCharacter extracts a single character bitmap from a screenshot
 func ExtractSingleCharacter(screenshotPath string, width, height int, row, col int) (*CharacterBitmap, error) {
-	// Open the screenshot file
-	file, err := os.Open(screenshotPath)
+	img, err := decodeImageFile(screenshotPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open screenshot: %v", err)
-	}
-	defer file.Close()
-
-	// Try to decode the image using netpbm first
-	var img image.Image
-	img, err = netpbm.Decode(file, nil)
-	if err != nil {
-		// If netpbm fails, try standard image decoders
-		file.Seek(0, 0) // Reset file pointer to beginning
-		img, _, err = image.Decode(file)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode image: %v", err)
-		}
+		return nil, err
 	}
 
 	// Get image dimensions

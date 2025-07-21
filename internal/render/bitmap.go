@@ -47,27 +47,9 @@ func RenderBitmap(bitmap *ocr.CharacterBitmap, writer io.Writer, useColor bool) 
 }
 
 // FormatBitmapAsHex formats a bitmap as a hex string
-// This is a unified implementation to ensure consistent hex output
+// This is a wrapper around the ocr package function to maintain API compatibility
 func FormatBitmapAsHex(bitmap *ocr.CharacterBitmap) string {
-	var hexStr strings.Builder
-	hexStr.WriteString("0x")
-
-	for y := 0; y < bitmap.Height; y++ {
-		var rowValue uint32
-
-		// Convert row to binary
-		for x := 0; x < bitmap.Width; x++ {
-			if y < len(bitmap.Data) && x < len(bitmap.Data[y]) && bitmap.Data[y][x] {
-				// Set bit if pixel is on
-				rowValue |= 1 << (bitmap.Width - 1 - x)
-			}
-		}
-
-		// Format as hex without 0x prefix
-		hexStr.WriteString(fmt.Sprintf("%0*X", (bitmap.Width+3)/4, rowValue))
-	}
-
-	return hexStr.String()
+	return ocr.FormatBitmapAsHex(bitmap)
 }
 
 // FormatBitmapOutput formats a complete bitmap output including the hex representation
