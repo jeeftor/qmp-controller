@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jeeftor/qmp/internal/logging"
-	"github.com/jeeftor/qmp/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
@@ -112,7 +112,7 @@ var liveCmd = &cobra.Command{
 	Short: "Enter live keyboard mode",
 	Long: `Enter live keyboard mode to type directly into the VM.
 This mode captures all keyboard input and sends it to the VM in real-time.
-Press Ctrl+\ (backslash) to exit live mode.
+Press Ctrl+^ (Ctrl+6) to exit live mode.
 
 Supported special keys:
 - Arrow keys (Up, Down, Left, Right)
@@ -142,7 +142,7 @@ Example:
 		defer client.Close()
 
 		fmt.Printf("Connected to VM %s\n", vmid)
-		fmt.Println("Entering live keyboard mode. Press Ctrl+\\ (backslash) to exit.")
+		fmt.Println("Entering live keyboard mode. Press Ctrl+^ (Ctrl+6) to exit.")
 
 		// Enter raw mode
 		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
@@ -177,8 +177,10 @@ Example:
 			}
 
 			if n > 0 {
-				// Check for Ctrl+\ (ASCII 28) to exit
-				if buf[0] == 28 {
+				logging.Debug("Live mode received byte", "byte", buf[0], "char", string(buf[0]))
+
+				// Check for Ctrl+^ (ASCII 30) to exit - rarely used control char
+				if buf[0] == 30 {
 					fmt.Println("\r\nExiting live keyboard mode")
 					break
 				}
@@ -211,9 +213,9 @@ Example:
 
 						// Then send each character individually
 						for i := 1; i < len(escapeBuffer); i++ {
-							key, err := handleSpecialKey(escapeBuffer[i])
-							if err == nil && key != "" {
-								if err := client.SendKey(key); err != nil {
+							char := string(rune(escapeBuffer[i]))
+							if escapeBuffer[i] >= 32 && escapeBuffer[i] <= 126 {
+								if err := client.SendKey(char); err != nil {
 									fmt.Printf("\r\nError sending key to VM: %v\n", err)
 								}
 							}
@@ -239,28 +241,94 @@ Example:
 					// If we just sent ESC and this is a regular character, it's likely a vi command
 					if justSentEsc {
 						justSentEsc = false
-						// For vi commands, just send the character as is
-						key, err := handleSpecialKey(buf[0])
-						if err != nil {
-							fmt.Printf("\r\nError: %v\n", err)
-							continue
+						// For vi commands, send the character through SendKey for proper mapping
+						char := string(rune(buf[0]))
+
+						// Handle special control characters
+						switch buf[0] {
+						case 13: // Enter
+							char = "enter"
+						case 9: // Tab
+							char = "tab"
+						case 32: // Space
+							char = "space"
+						default:
+							if buf[0] >= 32 && buf[0] <= 126 {
+								// Regular ASCII characters - let SendKey handle mapping
+								char = string(rune(buf[0]))
+							} else {
+								// For other characters, skip
+								logging.Debug("Ignoring non-ASCII character in vi mode", "byte", buf[0])
+								continue
+							}
 						}
 
-						// Send key to VM
-						if err := client.SendKey(key); err != nil {
+						// Send key to VM - let SendKey handle all the mapping logic
+						if err := client.SendKey(char); err != nil {
 							fmt.Printf("\r\nError sending key to VM: %v\n", err)
 							continue
 						}
 					} else {
 						// Handle regular keys and control characters
-						key, err := handleSpecialKey(buf[0])
-						if err != nil {
-							fmt.Printf("\r\nError: %v\n", err)
-							continue
+						// For live mode, send the byte as a character directly through SendKey
+						// which will handle the proper mapping
+						char := string(rune(buf[0]))
+
+						// Handle special control characters that need direct mapping
+						switch buf[0] {
+						case 13: // Enter
+							char = "enter"
+						case 27: // Escape - already handled above, but just in case
+							char = "esc"
+						case 127: // Backspace
+							char = "backspace"
+						case 9: // Tab
+							char = "tab"
+						case 32: // Space
+							char = "space"
+						default:
+							// Handle control characters (Ctrl+A through Ctrl+Z)
+							if buf[0] < 32 {
+								// Convert control character to corresponding key with ctrl modifier
+								if buf[0] == 3 { // Ctrl+C
+									char = "ctrl-c"
+								} else if buf[0] == 26 { // Ctrl+Z
+									char = "ctrl-z"
+								} else if buf[0] == 4 { // Ctrl+D
+									char = "ctrl-d"
+								} else if buf[0] == 1 { // Ctrl+A
+									char = "ctrl-a"
+								} else if buf[0] == 5 { // Ctrl+E
+									char = "ctrl-e"
+								} else if buf[0] == 23 { // Ctrl+W
+									char = "ctrl-w"
+								} else if buf[0] == 20 { // Ctrl+T
+									char = "ctrl-t"
+								} else if buf[0] == 18 { // Ctrl+R
+									char = "ctrl-r"
+								} else if buf[0] == 21 { // Ctrl+U
+									char = "ctrl-u"
+								} else if buf[0] == 11 { // Ctrl+K
+									char = "ctrl-k"
+								} else if buf[0] == 12 { // Ctrl+L
+									char = "ctrl-l"
+								} else {
+									// For other control characters, use the letter
+									ctrlKey := string('a' + (buf[0] - 1))
+									char = "ctrl-" + ctrlKey
+								}
+							} else if buf[0] >= 32 && buf[0] <= 126 {
+								// For regular ASCII characters, let SendKey handle the mapping
+								char = string(rune(buf[0]))
+							} else {
+								// For extended characters, ignore gracefully
+								logging.Debug("Ignoring extended byte in live mode", "byte", buf[0])
+								continue
+							}
 						}
 
-						// Send key to VM
-						if err := client.SendKey(key); err != nil {
+						// Send key to VM - let SendKey handle all the mapping logic
+						if err := client.SendKey(char); err != nil {
 							fmt.Printf("\r\nError sending key to VM: %v\n", err)
 							continue
 						}
@@ -268,6 +336,137 @@ Example:
 				}
 			}
 		}
+	},
+}
+
+// rawCmd represents the keyboard raw command
+var rawCmd = &cobra.Command{
+	Use:   "raw [vmid] [json]",
+	Short: "Send a raw JSON QMP command",
+	Long: `Send a raw JSON QMP command directly to the VM.
+This is useful for debugging and testing specific QMP structures.
+
+Examples:
+  # Send a simple key
+  qmp keyboard raw 108 '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"a"}]}}'
+
+  # Test Unicode character
+  qmp keyboard raw 108 '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"U00E0"}]}}'
+
+  # Send key combination
+  qmp keyboard raw 108 '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"ctrl"},{"type":"qcode","data":"c"}]}}'`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		vmid := args[0]
+		jsonStr := args[1]
+
+		var client *qmp.Client
+		if socketPath := GetSocketPath(); socketPath != "" {
+			client = qmp.NewWithSocketPath(vmid, socketPath)
+		} else {
+			client = qmp.New(vmid)
+		}
+
+		if err := client.Connect(); err != nil {
+			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+			os.Exit(1)
+		}
+		defer client.Close()
+
+		if err := client.SendRawJSON(jsonStr); err != nil {
+			fmt.Printf("Error sending raw JSON to VM %s: %v\n", vmid, err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Raw JSON sent to VM %s successfully\n", vmid)
+	},
+}
+
+// testCmd represents the keyboard test command for debugging conversions
+var testCmd = &cobra.Command{
+	Use:   "test [vmid] [text]",
+	Short: "Test Unicode to Alt code conversion without sending",
+	Long: `Test Unicode to Alt code conversion and show what would be sent.
+This is useful for debugging the conversion logic.
+
+Examples:
+  qmp keyboard test 108 "©"
+  qmp keyboard test 108 "àáâãäå"`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		vmid := args[0]
+		text := args[1]
+
+		var client *qmp.Client
+		if socketPath := GetSocketPath(); socketPath != "" {
+			client = qmp.NewWithSocketPath(vmid, socketPath)
+		} else {
+			client = qmp.New(vmid)
+		}
+
+		fmt.Printf("Testing conversion for: %s\n", text)
+		for i, r := range text {
+			fmt.Printf("Character %d: '%c' (code %d)\n", i+1, r, int(r))
+
+			if r > 127 {
+				// Test the conversion logic
+				altKeys := client.TestConvertToAltCode(r)
+				if len(altKeys) > 0 {
+					fmt.Printf("  → Alt code sequence: %v\n", altKeys)
+				} else {
+					fmt.Printf("  → No Alt code mapping, would use Unicode format: U%04X\n", int(r))
+				}
+			} else {
+				fmt.Printf("  → Regular ASCII, would send as: %c\n", r)
+			}
+		}
+	},
+}
+
+// consoleCmd represents the keyboard console command for virtual terminal switching
+var consoleCmd = &cobra.Command{
+	Use:   "console [vmid] [1-6]",
+	Short: "Switch to virtual terminal console",
+	Long: `Switch to a virtual terminal console (F1-F6) using Ctrl+Alt+F[1-6].
+This is useful for switching between different virtual terminals in Linux VMs.
+
+Examples:
+  qmp keyboard console 108 1   # Switch to console 1 (Ctrl+Alt+F1)
+  qmp keyboard console 108 6   # Switch to console 6 (Ctrl+Alt+F6)`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		vmid := args[0]
+		consoleNum := args[1]
+
+		// Validate console number
+		if consoleNum < "1" || consoleNum > "6" {
+			fmt.Printf("Error: Console number must be between 1 and 6, got: %s\n", consoleNum)
+			os.Exit(1)
+		}
+
+		var client *qmp.Client
+		if socketPath := GetSocketPath(); socketPath != "" {
+			client = qmp.NewWithSocketPath(vmid, socketPath)
+		} else {
+			client = qmp.New(vmid)
+		}
+
+		if err := client.Connect(); err != nil {
+			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+			os.Exit(1)
+		}
+		defer client.Close()
+
+		// Build the F-key name (f1, f2, etc.)
+		fKey := fmt.Sprintf("f%s", consoleNum)
+
+		// Send Ctrl+Alt+F[1-6] combination
+		if err := client.SendKeyCombo([]string{"ctrl", "alt", fKey}); err != nil {
+			fmt.Printf("Error switching to console %s on VM %s: %v\n", consoleNum, vmid, err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Switched to console %s on VM %s (Ctrl+Alt+%s)\n", consoleNum, vmid, strings.ToUpper(fKey))
 	},
 }
 
@@ -432,61 +631,6 @@ func handleEscapeSequence(seq []byte) (string, error) {
 	return "", fmt.Errorf("Unsupported escape sequence: %v", seq)
 }
 
-// handleSpecialKey converts byte input to key name for QMP
-func handleSpecialKey(b byte) (string, error) {
-	switch b {
-	case 13: // Enter
-		return "ret", nil
-	case 27: // Escape
-		return "esc", nil
-	case 127: // Backspace
-		return "backspace", nil
-	case 9: // Tab
-		return "tab", nil
-	case 32: // Space
-		return "spc", nil
-	default:
-		// Handle control characters (Ctrl+A through Ctrl+Z)
-		if b < 32 {
-			// Convert control character to corresponding key with ctrl modifier
-			if b == 3 { // Ctrl+C
-				return "ctrl-c", nil
-			} else if b == 26 { // Ctrl+Z
-				return "ctrl-z", nil
-			} else if b == 4 { // Ctrl+D
-				return "ctrl-d", nil
-			} else if b == 1 { // Ctrl+A
-				return "ctrl-a", nil
-			} else if b == 5 { // Ctrl+E
-				return "ctrl-e", nil
-			} else if b == 23 { // Ctrl+W
-				return "ctrl-w", nil
-			} else if b == 20 { // Ctrl+T
-				return "ctrl-t", nil
-			} else if b == 18 { // Ctrl+R
-				return "ctrl-r", nil
-			} else if b == 21 { // Ctrl+U
-				return "ctrl-u", nil
-			} else if b == 11 { // Ctrl+K
-				return "ctrl-k", nil
-			} else if b == 12 { // Ctrl+L
-				return "ctrl-l", nil
-			} else {
-				// For other control characters, use the letter
-				ctrlKey := string('a' + (b - 1))
-				return "ctrl-" + ctrlKey, nil
-			}
-		}
-
-		// For regular ASCII characters, just use the character
-		if b >= 32 && b <= 126 {
-			return string(b), nil
-		}
-
-		// For unsupported keys
-		return "", fmt.Errorf("Key not yet implemented: %d", b)
-	}
-}
 
 // getKeyDelay determines the key delay to use based on flag or config
 func getKeyDelay() time.Duration {
@@ -510,6 +654,9 @@ func init() {
 	keyboardCmd.AddCommand(sendKeyCmd)
 	keyboardCmd.AddCommand(typeTextCmd)
 	keyboardCmd.AddCommand(liveCmd)
+	keyboardCmd.AddCommand(rawCmd)
+	keyboardCmd.AddCommand(testCmd)
+	keyboardCmd.AddCommand(consoleCmd)
 
 	// Add flags for keyboard commands - use "l" as shorthand for delay
 	typeTextCmd.Flags().DurationVarP(&keyDelay, "delay", "l", 0, "delay between key presses (default 50ms)")

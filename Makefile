@@ -1,16 +1,37 @@
+
+# Build variables
+GIT_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+BUILD_TIME ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+
+# LDFLAGS for embedding version information
+LDFLAGS := -ldflags "-s -w \
+	-X github.com/jeeftor/qmp-controller/cmd.buildVersion=$(GIT_TAG) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildCommit=$(GIT_COMMIT) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildTime=$(BUILD_TIME)"
+
+
 build-amd:
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o dist/qmp-controller-amd64
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a $(LDFLAGS) -ldflags '-extldflags "-static"' -o dist/qmp-controller-amd64
 
 build-arm:
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o dist/qmp-controller-arm64
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a $(LDFLAGS) -ldflags '-extldflags "-static"' -o dist/qmp-controller-arm64
 
-build: build-arm build-amd
+build-mac-arm:
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -a $(LDFLAGS) -o dist/qmp-controller-darwin-arm64
 
-scp: build
+build: build-arm build-amd build-mac-arm
+
+clean:
+	rm -rf dist
+
+scp: build-amd
 	scp ./dist/qmp-controller-amd64 pve1:~/qmp-controller &
 	scp ./dist/qmp-controller-amd64 pve2:~/qmp-controller &
 	scp ./dist/qmp-controller-amd64 pve3:~/qmp-controller &
 	scp ./dist/qmp-controller-amd64 pve4:~/qmp-controller &
+	cp ./dist/qmp-controller-amd64  /Users/jstein/devel/n2cx/secureUSB/qmp &
 	wait
 
 socket-setup:
@@ -121,4 +142,4 @@ clean-socket: socket-cleanup
 debug-socket: socket-debug
 clean-simple: socket-simple-cleanup
 
-.PHONY: build-amd build-arm build scp socket-setup socket-simple socket-simple-cleanup socket-test socket-test-manual socket-cleanup socket-status socket test-socket clean-socket socket-debug socket-manual debug-socket socket-simple-start clean-simple test-manual
+.PHONY: clean build-amd build-arm build-mac-arm build scp socket-setup socket-simple socket-simple-cleanup socket-test socket-test-manual socket-cleanup socket-status socket test-socket clean-socket socket-debug socket-manual debug-socket socket-simple-start clean-simple test-manual

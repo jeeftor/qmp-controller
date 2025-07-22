@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jeeftor/qmp/cmd"
+	"github.com/jeeftor/qmp-controller/cmd"
 )
 
 func main() {

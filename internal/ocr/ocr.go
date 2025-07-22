@@ -14,9 +14,10 @@ import (
 
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/jeeftor/qmp/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/logging"
 )
 
 // CharacterBitmap represents a bitmap of a single character
@@ -250,6 +251,78 @@ func ProcessScreenshotWithCropAndTrainingData(screenshotPath, trainingDataPath s
 	return result, nil
 }
 
+// min returns the minimum of two uint32 values
+func min(a, b uint32) uint32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// max returns the maximum of two uint32 values
+func max(a, b uint32) uint32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// colorToKey converts a color to a string key for counting
+func colorToKey(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	// Use 8-bit values to reduce color variations
+	return fmt.Sprintf("%d,%d,%d", r>>8, g>>8, b>>8)
+}
+
+// findMostCommonColor finds the most frequent color in a slice of colors
+func findMostCommonColor(pixels []color.Color) color.Color {
+	if len(pixels) == 0 {
+		return color.RGBA{255, 255, 255, 255} // default to white
+	}
+
+	colorCounts := make(map[string]int)
+	colorMap := make(map[string]color.Color)
+
+	// Count occurrences of each color
+	for _, c := range pixels {
+		key := colorToKey(c)
+		colorCounts[key]++
+		colorMap[key] = c
+	}
+
+	// Find the most common color
+	maxCount := 0
+	var mostCommonKey string
+	for key, count := range colorCounts {
+		if count > maxCount {
+			maxCount = count
+			mostCommonKey = key
+		}
+	}
+
+	return colorMap[mostCommonKey]
+}
+
+// isPixelDifferentFromBackground determines if a pixel color is significantly different from background
+func isPixelDifferentFromBackground(r, g, b, bgR, bgG, bgB uint32) bool {
+	// Convert to 8-bit for easier comparison
+	r8, g8, b8 := r>>8, g>>8, b>>8
+	bgR8, bgG8, bgB8 := bgR>>8, bgG>>8, bgB>>8
+
+	// Calculate color distance (simple Euclidean distance)
+	dr := int(r8) - int(bgR8)
+	dg := int(g8) - int(bgG8)
+	db := int(b8) - int(bgB8)
+
+	distance := dr*dr + dg*dg + db*db
+
+	// If the distance is above a threshold, consider it text
+	// This threshold may need tuning - starting with a low value to catch colored text
+	threshold := 30 * 30 // roughly 30 units difference in any channel
+
+	return distance > threshold
+}
+
 // extractCharacterBitmap extracts a bitmap for a single character cell
 func extractCharacterBitmap(img image.Image, x, y, cellWidth, cellHeight int) (CharacterBitmap, error) {
 	// Create a new bitmap
@@ -266,7 +339,26 @@ func extractCharacterBitmap(img image.Image, x, y, cellWidth, cellHeight int) (C
 		bitmap.Colors[i] = make([]color.Color, cellWidth)
 	}
 
-	// Extract the bitmap data
+	// First pass: collect all pixel colors to determine background color
+	var pixels []color.Color
+	for cy := 0; cy < cellHeight; cy++ {
+		for cx := 0; cx < cellWidth; cx++ {
+			c := img.At(x+cx, y+cy)
+			pixels = append(pixels, c)
+		}
+	}
+
+	// Find the most common color (background color)
+	bgColor := findMostCommonColor(pixels)
+	bgR, bgG, bgB, _ := bgColor.RGBA()
+
+	// Debug output for background color detection
+	logging.Debug("Character bitmap extraction",
+		"position", fmt.Sprintf("(%d,%d)", x, y),
+		"cellSize", fmt.Sprintf("%dx%d", cellWidth, cellHeight),
+		"backgroundRGB", fmt.Sprintf("(%d,%d,%d)", bgR>>8, bgG>>8, bgB>>8))
+
+	// Second pass: extract the bitmap data using background color as reference
 	for cy := 0; cy < cellHeight; cy++ {
 		for cx := 0; cx < cellWidth; cx++ {
 			// Get the pixel color
@@ -276,9 +368,9 @@ func extractCharacterBitmap(img image.Image, x, y, cellWidth, cellHeight int) (C
 			// Store the original color
 			bitmap.Colors[cy][cx] = c
 
-			// Convert to grayscale and threshold
-			gray := (r + g + b) / 3
-			bitmap.Data[cy][cx] = gray < 32768 // Threshold at 50% (RGBA uses 16-bit values)
+			// Check if this pixel is significantly different from background
+			isText := isPixelDifferentFromBackground(r, g, b, bgR, bgG, bgB)
+			bitmap.Data[cy][cx] = isText
 		}
 	}
 
@@ -364,9 +456,12 @@ func formatBitmapASCII(bitmap CharacterBitmap) string {
 	return sb.String()
 }
 
-// SaveTrainingData saves OCR training data to a file
+// SaveTrainingData saves OCR training data to a file, sorted by character value
 func SaveTrainingData(data *TrainingData, outputPath string) error {
-	jsonData, err := json.MarshalIndent(data, "", "  ")
+	// Create a sorted representation of the training data
+	sortedData := createSortedTrainingData(data)
+
+	jsonData, err := json.MarshalIndent(sortedData, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal training data: %v", err)
 	}
@@ -374,8 +469,42 @@ func SaveTrainingData(data *TrainingData, outputPath string) error {
 	return os.WriteFile(outputPath, jsonData, 0644)
 }
 
+// createSortedTrainingData creates a sorted representation of training data, sorted by character value
+func createSortedTrainingData(data *TrainingData) map[string]interface{} {
+	// Create a slice of key-value pairs for sorting
+	type bitmapEntry struct {
+		HexBitmap string `json:"hexBitmap"`
+		Char      string `json:"char"`
+	}
+
+	var entries []bitmapEntry
+	for hexBitmap, char := range data.BitmapMap {
+		entries = append(entries, bitmapEntry{
+			HexBitmap: hexBitmap,
+			Char:      char,
+		})
+	}
+
+	// Sort by character value
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Char < entries[j].Char
+	})
+
+	// Rebuild the map in sorted order
+	sortedMap := make(map[string]string)
+	for _, entry := range entries {
+		sortedMap[entry.HexBitmap] = entry.Char
+	}
+
+	return map[string]interface{}{
+		"bitmapMap": sortedMap,
+	}
+}
+
 // LoadTrainingData loads OCR training data from a file
 func LoadTrainingData(inputPath string) (*TrainingData, error) {
+	logging.Debug("Loading training data", "path", inputPath)
+
 	jsonData, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read training data: %v", err)
@@ -389,6 +518,27 @@ func LoadTrainingData(inputPath string) (*TrainingData, error) {
 	// Ensure BitmapMap is initialized
 	if data.BitmapMap == nil {
 		data.BitmapMap = make(map[string]string)
+	}
+
+	logging.Debug("Training data loaded successfully",
+		"path", inputPath,
+		"characterCount", len(data.BitmapMap))
+
+	// Show first few entries for debugging
+	count := 0
+	for hex, char := range data.BitmapMap {
+		if count < 5 {
+			logging.Debug("Training data entry",
+				"hex", func() string {
+					if len(hex) > 20 { return hex[:20] + "..." }
+					return hex
+				}(),
+				"char", char)
+		}
+		count++
+		if count >= 5 {
+			break
+		}
 	}
 
 	return &data, nil
@@ -511,6 +661,9 @@ func RecognizeCharacters(result *OCRResult, trainingData *TrainingData) error {
 			bitmap := result.CharBitmaps[idx]
 			recognizedChar := recognizeCharacter(bitmap, trainingData)
 			lineBuilder.WriteString(recognizedChar)
+
+			// Update the bitmap's Char field so training system knows it's recognized
+			result.CharBitmaps[idx].Char = recognizedChar
 			idx++
 		}
 
@@ -524,11 +677,37 @@ func RecognizeCharacters(result *OCRResult, trainingData *TrainingData) error {
 func recognizeCharacter(bitmap CharacterBitmap, trainingData *TrainingData) string {
 	// First try direct hex bitmap lookup (exact match)
 	hexBitmap := FormatBitmapAsHex(&bitmap)
+
+	// Debug logging to trace recognition
+	logging.Debug("Recognizing character",
+		"hexBitmap", hexBitmap,
+		"trainingDataSize", len(trainingData.BitmapMap))
+
 	if char, found := trainingData.BitmapMap[hexBitmap]; found {
+		logging.Debug("Character recognized from training data",
+			"hexBitmap", hexBitmap,
+			"char", char)
 		return char
 	}
 
+	// Debug: Log first few training data entries for comparison
+	if len(trainingData.BitmapMap) > 0 {
+		count := 0
+		for trainedHex := range trainingData.BitmapMap {
+			if count < 3 { // Show first 3 for comparison
+				logging.Debug("Training data sample",
+					"trainedHex", trainedHex,
+					"matches", trainedHex == hexBitmap)
+			}
+			count++
+			if count >= 3 {
+				break
+			}
+		}
+	}
+
 	// No match found
+	logging.Debug("Character not recognized", "hexBitmap", hexBitmap)
 	return "?"
 }
 

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeeftor/qmp/internal/logging"
-	"github.com/jeeftor/qmp/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -26,10 +26,25 @@ Each line in the script file is treated as a separate command to be executed.
 Empty lines and lines starting with # are ignored.
 
 Special commands can be included using <command> syntax:
-  <sleep N>    - Sleep for N seconds
+  <sleep N>         - Sleep for N seconds
+  <console N>       - Switch to console N (1-6) using Ctrl+Alt+F[N]
+  <key combo>       - Send key combination (e.g., <key ctrl-alt-del>)
+  <ctrl-t>          - Send Ctrl+T (direct key combo syntax)
+  <esc>             - Send Escape key
+  <shift-h>         - Send Shift+H
+  <ctrl-alt-delete> - Send Ctrl+Alt+Delete
 
-Example:
-  qmp script 106 /path/to/script.txt`,
+Examples:
+  qmp script 106 /path/to/script.txt
+
+Script file example:
+  # Comments start with #
+  <sleep 1>
+  <console 1>
+  <esc>
+  :w
+  <enter>
+  <ctrl-c>`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		vmid := args[0]
@@ -93,8 +108,51 @@ Example:
 						sleepDuration := time.Duration(seconds * float64(time.Second))
 						logging.Debug("Sleeping", "duration", sleepDuration)
 						time.Sleep(sleepDuration)
+					case "key":
+						// Handle key combinations like <key ctrl-alt-del>
+						if len(parts) != 2 {
+							fmt.Printf("Line %d: Invalid key command format. Use <key combination>\n", lineNum)
+							continue
+						}
+						keyCombo := parts[1]
+						logging.Info("Sending key combination", "keys", keyCombo)
+						if err := client.SendKey(keyCombo); err != nil {
+							fmt.Printf("Line %d: Error sending key combination '%s': %v\n", lineNum, keyCombo, err)
+							continue
+						}
+					case "console":
+						// Handle console switching like <console 1>
+						if len(parts) != 2 {
+							fmt.Printf("Line %d: Invalid console command format. Use <console 1-6>\n", lineNum)
+							continue
+						}
+						consoleNum := parts[1]
+						// Validate console number
+						if consoleNum < "1" || consoleNum > "6" {
+							fmt.Printf("Line %d: Console number must be between 1 and 6, got: %s\n", lineNum, consoleNum)
+							continue
+						}
+						// Build the F-key name (f1, f2, etc.)
+						fKey := fmt.Sprintf("f%s", consoleNum)
+						// Send Ctrl+Alt+F[1-6] combination
+						logging.Info("Switching to console", "console", consoleNum)
+						if err := client.SendKeyCombo([]string{"ctrl", "alt", fKey}); err != nil {
+							fmt.Printf("Line %d: Error switching to console %s: %v\n", lineNum, consoleNum, err)
+							continue
+						}
 					default:
-						fmt.Printf("Line %d: Unknown special command: %s\n", lineNum, parts[0])
+						// If it's not a known command, treat it as a key combination directly
+						// This allows <ctrl-t>, <esc>, <shift-h> syntax
+						keyCombo := command
+						if isValidKeyCombo(keyCombo) {
+							logging.Info("Sending key combination", "keys", keyCombo)
+							if err := client.SendKey(keyCombo); err != nil {
+								fmt.Printf("Line %d: Error sending key combination '%s': %v\n", lineNum, keyCombo, err)
+								continue
+							}
+						} else {
+							fmt.Printf("Line %d: Unknown special command: %s\n", lineNum, parts[0])
+						}
 					}
 					continue
 				}
@@ -141,6 +199,53 @@ func getScriptDelay() time.Duration {
 
 	// Default to 50ms
 	return 50 * time.Millisecond
+}
+
+// isValidKeyCombo checks if a string looks like a valid key combination
+func isValidKeyCombo(combo string) bool {
+	// Allow single keys and combinations with - or +
+	if len(combo) == 0 {
+		return false
+	}
+
+	// Common single keys
+	singleKeys := map[string]bool{
+		"esc": true, "escape": true, "enter": true, "return": true, "ret": true,
+		"tab": true, "space": true, "spc": true, "backspace": true, "delete": true,
+		"up": true, "down": true, "left": true, "right": true,
+		"home": true, "end": true, "pgup": true, "pgdn": true,
+		"insert": true, "caps_lock": true, "num_lock": true, "scroll_lock": true,
+	}
+
+	// Function keys f1-f12
+	for i := 1; i <= 12; i++ {
+		singleKeys[fmt.Sprintf("f%d", i)] = true
+	}
+
+	// Single character keys (a-z, 0-9, punctuation)
+	if len(combo) == 1 {
+		return true
+	}
+
+	// Check if it's in our single keys list
+	if singleKeys[strings.ToLower(combo)] {
+		return true
+	}
+
+	// Check if it contains modifiers (likely a combination)
+	modifiers := []string{"ctrl", "alt", "shift", "cmd", "super", "meta", "control"}
+	for _, mod := range modifiers {
+		if strings.Contains(strings.ToLower(combo), mod) {
+			return true
+		}
+	}
+
+	// If it contains - or +, assume it's a key combo
+	if strings.Contains(combo, "-") || strings.Contains(combo, "+") {
+		return true
+	}
+
+	return false
 }
 
 func init() {

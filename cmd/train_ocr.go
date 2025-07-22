@@ -6,11 +6,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
-	"github.com/jeeftor/qmp/internal/ocr"
-	"github.com/jeeftor/qmp/internal/render"
+	"github.com/jeeftor/qmp-controller/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/render"
+	"github.com/jeeftor/qmp-controller/internal/training"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +35,7 @@ that can be used by the OCR command for better character recognition.
 
 You can specify the resolution in several ways:
   --width and --height: Set the number of columns and rows
-  --res: Set the resolution in the format "columns x rows" (e.g., "80x25")
+  --res: Set the resolution in the format "columns x rows" (e.g., "160x50")
   -c and -r: Short form for columns and rows
 
 Training modes:
@@ -44,22 +44,22 @@ Training modes:
 
 Examples:
   # Train OCR with explicit width and height
-  qmp train-ocr training-image.ppm training-data.json --width 80 --height 25
+  qmp train-ocr training-image.ppm training-data.json --width 160 --height 50
 
   # Use the resolution format
-  qmp train-ocr training-image.ppm training-data.json --res 80x25
+  qmp train-ocr training-image.ppm training-data.json --res 160x50
 
   # Use short form flags
-  qmp train-ocr training-image.ppm training-data.json -c 80 -r 25
+  qmp train-ocr training-image.ppm training-data.json -c 160 -r 50
 
   # Specify custom training characters
-  qmp train-ocr training-image.ppm training-data.json --res 80x25 --train-chars "AaBbCcDd0123456789"
+  qmp train-ocr training-image.ppm training-data.json --res 160x50 --train-chars "AaBbCcDd0123456789"
 
   # Use interactive training mode
-  qmp train-ocr screenshot.ppm training-data.json --res 80x25 --interactive
+  qmp train-ocr screenshot.ppm training-data.json --res 160x50 --interactive
 
   # Update existing training data with interactive mode
-  qmp train-ocr screenshot.ppm training-data.json --res 80x25 --interactive --update`,
+  qmp train-ocr screenshot.ppm training-data.json --res 160x50 --interactive --update`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		inputFile := args[0]
@@ -179,102 +179,82 @@ Examples:
 				os.Exit(0)
 			}()
 
-			// Process each character bitmap
-			for row := 0; row < result.Height; row++ {
-				for col := 0; col < result.Width; col++ {
-					idx := row*result.Width + col
-					if idx >= len(result.CharBitmaps) {
-						continue
+			// Get terminal dimensions for multi-character layout
+			termWidth, _, err := training.GetTerminalDimensions()
+			if err != nil {
+				fmt.Printf("Warning: Could not detect terminal size, using defaults: %v\n", err)
+				termWidth = 80
+			}
+
+			// Create character batches for multi-character display
+			batches := training.CreateCharacterBatches(result, termWidth)
+
+			if len(batches) == 0 {
+				fmt.Println("No unrecognized characters found for training.")
+				return
+			}
+
+			fmt.Printf("Found %d unrecognized character patterns to train.\n",
+				func() int {
+					total := 0
+					for _, batch := range batches {
+						total += len(batch.Bitmaps)
 					}
+					return total
+				}())
 
-					bitmap := result.CharBitmaps[idx]
-
-					// Skip already recognized characters
-					if bitmap.Char != "" {
-						continue
-					}
-
-					// Generate hex key for this bitmap
-					hexKey := render.FormatBitmapAsHex(&bitmap)
-
-					// Check if we've already seen this bitmap pattern in this session
-					if existingChar, found := seenBitmaps[hexKey]; found {
-						fmt.Printf("\nSkipping character at position (%d,%d) - matches previously trained character '%s'\n",
-							row, col, existingChar)
-
-						// Set the character based on the previously trained one
-						bitmap.Char = existingChar
-						result.CharBitmaps[idx].Char = existingChar
-						continue
-					}
-
-					// Display the character bitmap
-					fmt.Printf("\nCharacter at position (%d,%d):\n", row, col)
-					fmt.Printf("Hex bitmap: %s\n\n", render.FormatBitmapAsHex(&bitmap))
-
-					// Print ANSI representation
-					var sb strings.Builder
-					render.RenderBitmap(&bitmap, &sb, false) // Using false for colorMode as it's not supported in training yet
-					fmt.Print(sb.String())
-					fmt.Print("\n")
-
-					// Prompt for character
-					fmt.Print("Enter character (or press Enter to skip): ")
-					input, err := reader.ReadString('\n')
-					if err != nil {
-						fmt.Printf("Error reading input: %v\n", err)
-						continue
-					}
-
-					// TrimSpace will remove leading/trailing spaces, but we need to check if the input was just a space
-					// before trimming
-					wasJustSpace := false
-					if len(input) == 2 && input[0] == ' ' && input[1] == '\n' {
-						wasJustSpace = true
-					}
-
-					input = strings.TrimSpace(input)
-					if input == "quit" || input == "exit" {
-						fmt.Println("Training session ended by user.")
+			// Process each batch
+			for batchNum, batch := range batches {
+				// Skip batch if all characters already seen
+				hasNewChars := false
+				for _, hexKey := range batch.HexKeys {
+					if _, found := seenBitmaps[hexKey]; !found {
+						hasNewChars = true
 						break
 					}
+				}
 
-					if input == "" && !wasJustSpace {
-						fmt.Println("Skipped.")
-						continue
-					}
+				if !hasNewChars {
+					fmt.Printf("Skipping batch %d/%d - all characters already trained\n",
+						batchNum+1, len(batches))
+					continue
+				}
 
-					// Special handling for space character
-					var char string
-					if wasJustSpace || input == "space" {
-						char = " "
-						fmt.Println("Using space character.")
-					} else {
-						// Use only the first character if multiple were entered
-						char = string([]rune(input)[0])
-					}
+				// Display the batch
+				batchDisplay := training.RenderCharacterBatch(batch, batchNum+1, len(batches))
+				fmt.Print(batchDisplay)
 
-					// Add to training data
-					bitmap.Char = char
+				// Process input for this batch
+				batchMappings := training.ProcessBatchInput(batch, reader)
 
-					// Store in BitmapMap (hex string to character)
-					hexKey = render.FormatBitmapAsHex(&bitmap)
+				// Apply mappings to training data
+				for hexKey, char := range batchMappings {
 					trainingData.BitmapMap[hexKey] = char
-
-					// Add to seen bitmaps to avoid duplicate prompts
 					seenBitmaps[hexKey] = char
-
 					modified = true
 
-					fmt.Printf("Added character '%s' to training data.\n", char)
+					// Update all matching characters in the result
+					for i := range result.CharBitmaps {
+						if result.CharBitmaps[i].Char == "" || result.CharBitmaps[i].Char == "?" {
+							if render.FormatBitmapAsHex(&result.CharBitmaps[i]) == hexKey {
+								result.CharBitmaps[i].Char = char
+							}
+						}
+					}
 
-					// Save training data after each character
+					fmt.Printf("Added character '%s' to training data.\n", char)
+				}
+
+				// Save training data after each batch
+				if len(batchMappings) > 0 {
 					if err := ocr.SaveTrainingData(trainingData, outputFile); err != nil {
 						fmt.Printf("Error saving training data: %v\n", err)
 					} else {
 						fmt.Printf("Training data saved to %s\n", outputFile)
 					}
 				}
+
+				// Continue to next batch automatically (user can Ctrl+C to stop)
 			}
 
 			if !modified {
@@ -319,9 +299,9 @@ func init() {
 	rootCmd.AddCommand(trainOcrCmd)
 
 	// Add resolution flags
-	trainOcrCmd.Flags().IntVarP(&trainScreenWidth, "width", "c", 80, "Number of columns in the terminal")
-	trainOcrCmd.Flags().IntVarP(&trainScreenHeight, "height", "r", 25, "Number of rows in the terminal")
-	trainOcrCmd.Flags().StringVar(&trainResolution, "res", "", "Resolution in format 'columns x rows' (e.g., '80x25')")
+	trainOcrCmd.Flags().IntVarP(&trainScreenWidth, "width", "c", 160, "Number of columns in the terminal")
+	trainOcrCmd.Flags().IntVarP(&trainScreenHeight, "height", "r", 50, "Number of rows in the terminal")
+	trainOcrCmd.Flags().StringVar(&trainResolution, "res", "", "Resolution in format 'columns x rows' (e.g., '160x50')")
 
 	// Add training flags
 	trainOcrCmd.Flags().StringVar(&trainCharacters, "train-chars", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", "Characters to train (for batch mode)")

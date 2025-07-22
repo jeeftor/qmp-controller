@@ -7,7 +7,7 @@ import (
 
 	fatihcolor "github.com/fatih/color"
 
-	"github.com/jeeftor/qmp/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/ocr"
 )
 
 // RenderBitmap renders a character bitmap to a string builder using fatih/color
