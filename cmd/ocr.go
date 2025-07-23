@@ -804,6 +804,230 @@ func formatSingleCharOutput(result *ocr.OCRResult, row, col int) string {
 	return sb.String()
 }
 
+// Search command variables
+var (
+	searchFirstOnly  bool
+	searchQuiet      bool
+	searchIgnoreCase bool
+)
+
+// ocrFindCmd represents the ocr find command for string searching
+var ocrFindCmd = &cobra.Command{
+	Use:   "find [string] [training-data] [vmid|input-file]",
+	Short: "Search for a string in OCR results",
+	Long: `Search for a literal string in OCR text results (scanned bottom-up).
+Returns all matches by default, or first match only with --first flag.
+Exit codes: 0 = found, 1 = not found, 2 = OCR error
+
+Examples:
+  # Search for "Login successful" in VM console
+  qmp ocr find "Login successful" training.json vm 123
+
+  # Search for "error" (case-insensitive, first match only)
+  qmp ocr find "error" training.json vm 123 --ignore-case --first
+
+  # Search in image file with debug output and line numbers
+  qmp ocr find "root@" training.json file screenshot.ppm --debug --line-numbers`,
+	Args: cobra.RangeArgs(2, 3),
+	Run: func(cmd *cobra.Command, args []string) {
+		searchString := args[0]
+		trainingDataPath := args[1]
+
+		// Parse resolution
+		parseResolution()
+
+		var result *ocr.OCRResult
+		var err error
+
+		if len(args) > 2 {
+			target := args[2]
+
+			// Determine if target is VM or file based on prefix or content
+			if strings.HasPrefix(target, "vm ") || (len(target) < 10 && strings.TrimSpace(target) != "" && !strings.Contains(target, ".")) {
+				// VM mode
+				vmid := strings.TrimPrefix(target, "vm ")
+				if vmid == target { // No "vm " prefix, assume direct vmid
+					vmid = target
+				}
+
+				var client *qmp.Client
+				if socketPath := GetSocketPath(); socketPath != "" {
+					client = qmp.NewWithSocketPath(vmid, socketPath)
+				} else {
+					client = qmp.New(vmid)
+				}
+
+				if err := client.Connect(); err != nil {
+					fmt.Fprintf(os.Stderr, "Error connecting to VM %s: %v\n", vmid, err)
+					os.Exit(2)
+				}
+				defer client.Close()
+
+				// Create temporary file for screenshot
+				tmpFile, err := os.CreateTemp("", "qmp-ocr-find-*.ppm")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error creating temporary file: %v\n", err)
+					os.Exit(2)
+				}
+				defer os.Remove(tmpFile.Name())
+				tmpFile.Close()
+
+				// Get remote temp path from flag or config
+				remotePath := getRemoteTempPath()
+
+				// Take screenshot and process
+				if err := client.ScreenDump(tmpFile.Name(), remotePath); err != nil {
+					fmt.Fprintf(os.Stderr, "Error taking screenshot: %v\n", err)
+					os.Exit(2)
+				}
+
+				result, err = ocr.ProcessScreenshotWithTrainingData(tmpFile.Name(), trainingDataPath, columns, rows, debugMode)
+			} else {
+				// File mode
+				result, err = ocr.ProcessScreenshotWithTrainingData(target, trainingDataPath, columns, rows, debugMode)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Must specify either VM ID or input file\n")
+			os.Exit(2)
+		}
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error processing OCR: %v\n", err)
+			os.Exit(2)
+		}
+
+		// Perform search
+		config := ocr.SearchConfig{
+			IgnoreCase:  searchIgnoreCase,
+			FirstOnly:   searchFirstOnly,
+			Quiet:       searchQuiet,
+			Debug:       debugMode,
+			LineNumbers: showLineNumbers,
+		}
+
+		searchResults := ocr.FindString(result, searchString, config)
+
+		// Output results and set exit code
+		output := ocr.FormatResults(searchResults, config)
+		if output != "" {
+			fmt.Print(output)
+		}
+
+		os.Exit(ocr.GetExitCode(searchResults, nil))
+	},
+}
+
+// ocrReCmd represents the ocr re command for regex searching
+var ocrReCmd = &cobra.Command{
+	Use:   "re [pattern] [training-data] [vmid|input-file]",
+	Short: "Search for a regex pattern in OCR results",
+	Long: `Search for a regular expression pattern in OCR text results (scanned bottom-up).
+Returns all matches by default, or first match only with --first flag.
+Exit codes: 0 = found, 1 = not found, 2 = OCR error, 3 = invalid regex
+
+Examples:
+  # Search for IP addresses
+  qmp ocr re "\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b" training.json vm 123
+
+  # Search for login attempts (with capture groups and debug output)
+  qmp ocr re "Login (successful|failed)" training.json vm 123 --debug
+
+  # Search for errors (case-insensitive, first match only)
+  qmp ocr re "[Ee]rror.*connection" training.json file console.ppm --first`,
+	Args: cobra.RangeArgs(2, 3),
+	Run: func(cmd *cobra.Command, args []string) {
+		pattern := args[0]
+		trainingDataPath := args[1]
+
+		// Parse resolution
+		parseResolution()
+
+		var result *ocr.OCRResult
+		var err error
+
+		if len(args) > 2 {
+			target := args[2]
+
+			// Determine if target is VM or file
+			if strings.HasPrefix(target, "vm ") || (len(target) < 10 && strings.TrimSpace(target) != "" && !strings.Contains(target, ".")) {
+				// VM mode
+				vmid := strings.TrimPrefix(target, "vm ")
+				if vmid == target {
+					vmid = target
+				}
+
+				var client *qmp.Client
+				if socketPath := GetSocketPath(); socketPath != "" {
+					client = qmp.NewWithSocketPath(vmid, socketPath)
+				} else {
+					client = qmp.New(vmid)
+				}
+
+				if err := client.Connect(); err != nil {
+					fmt.Fprintf(os.Stderr, "Error connecting to VM %s: %v\n", vmid, err)
+					os.Exit(2)
+				}
+				defer client.Close()
+
+				// Create temporary file for screenshot
+				tmpFile, err := os.CreateTemp("", "qmp-ocr-re-*.ppm")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error creating temporary file: %v\n", err)
+					os.Exit(2)
+				}
+				defer os.Remove(tmpFile.Name())
+				tmpFile.Close()
+
+				// Get remote temp path from flag or config
+				remotePath := getRemoteTempPath()
+
+				// Take screenshot and process
+				if err := client.ScreenDump(tmpFile.Name(), remotePath); err != nil {
+					fmt.Fprintf(os.Stderr, "Error taking screenshot: %v\n", err)
+					os.Exit(2)
+				}
+
+				result, err = ocr.ProcessScreenshotWithTrainingData(tmpFile.Name(), trainingDataPath, columns, rows, debugMode)
+			} else {
+				// File mode
+				result, err = ocr.ProcessScreenshotWithTrainingData(target, trainingDataPath, columns, rows, debugMode)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Must specify either VM ID or input file\n")
+			os.Exit(2)
+		}
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error processing OCR: %v\n", err)
+			os.Exit(2)
+		}
+
+		// Perform regex search
+		config := ocr.SearchConfig{
+			IgnoreCase:  searchIgnoreCase,
+			FirstOnly:   searchFirstOnly,
+			Quiet:       searchQuiet,
+			Debug:       debugMode,
+			LineNumbers: showLineNumbers,
+		}
+
+		searchResults, regexErr := ocr.FindRegex(result, pattern, config)
+
+		// Output results and set exit code
+		exitCode := ocr.GetExitCode(searchResults, regexErr)
+		if regexErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", regexErr)
+		} else {
+			output := ocr.FormatResults(searchResults, config)
+			if output != "" {
+				fmt.Print(output)
+			}
+		}
+
+		os.Exit(exitCode)
+	},
+}
+
 func init() {
 	// Add OCR command to root command
 	rootCmd.AddCommand(ocrCmd)
@@ -811,6 +1035,8 @@ func init() {
 	// Add subcommands to OCR command
 	ocrCmd.AddCommand(ocrVmCmd)
 	ocrCmd.AddCommand(ocrFileCmd)
+	ocrCmd.AddCommand(ocrFindCmd)
+	ocrCmd.AddCommand(ocrReCmd)
 
 	// Add flags to VM command
 	ocrVmCmd.Flags().IntVar(&screenWidth, "width", 160, "Screen width in characters")
@@ -844,6 +1070,31 @@ func init() {
 	ocrFileCmd.Flags().StringVar(&cropColsStr, "crop-cols", "", "Crop columns range in format 'start:end' (e.g., '10:50')")
 	ocrFileCmd.Flags().BoolVar(&updateTraining, "update-training", false, "Interactively train unrecognized characters")
 	ocrFileCmd.Flags().BoolVar(&renderSpecialChars, "render", false, "Render special characters (spaces, tabs, newlines) visually")
+
+	// Add flags for search commands (find and re) - matching other OCR commands
+	ocrFindCmd.Flags().BoolVar(&searchFirstOnly, "first", false, "Stop at first match")
+	ocrFindCmd.Flags().BoolVarP(&searchQuiet, "quiet", "q", false, "No text output, only exit codes")
+	ocrFindCmd.Flags().BoolVarP(&searchIgnoreCase, "ignore-case", "i", false, "Case-insensitive search")
+	ocrFindCmd.Flags().IntVar(&screenWidth, "width", 160, "Screen width in characters")
+	ocrFindCmd.Flags().IntVar(&screenHeight, "height", 50, "Screen height in characters")
+	ocrFindCmd.Flags().IntVarP(&columns, "columns", "c", 0, "Number of columns (overrides width)")
+	ocrFindCmd.Flags().IntVarP(&rows, "rows", "r", 0, "Number of rows (overrides height)")
+	ocrFindCmd.Flags().StringVar(&resolution, "res", "", "Resolution in format 'columns x rows' (e.g., '160x50')")
+	ocrFindCmd.Flags().BoolVar(&debugMode, "debug", false, "Enable debug output with detailed positions")
+	ocrFindCmd.Flags().BoolVarP(&showLineNumbers, "line-numbers", "l", false, "Show line numbers with output")
+	ocrFindCmd.Flags().BoolVar(&filterBlankLines, "filter", false, "Filter out blank lines from output")
+
+	ocrReCmd.Flags().BoolVar(&searchFirstOnly, "first", false, "Stop at first match")
+	ocrReCmd.Flags().BoolVarP(&searchQuiet, "quiet", "q", false, "No text output, only exit codes")
+	ocrReCmd.Flags().BoolVarP(&searchIgnoreCase, "ignore-case", "i", false, "Case-insensitive search")
+	ocrReCmd.Flags().IntVar(&screenWidth, "width", 160, "Screen width in characters")
+	ocrReCmd.Flags().IntVar(&screenHeight, "height", 50, "Screen height in characters")
+	ocrReCmd.Flags().IntVarP(&columns, "columns", "c", 0, "Number of columns (overrides width)")
+	ocrReCmd.Flags().IntVarP(&rows, "rows", "r", 0, "Number of rows (overrides height)")
+	ocrReCmd.Flags().StringVar(&resolution, "res", "", "Resolution in format 'columns x rows' (e.g., '160x50')")
+	ocrReCmd.Flags().BoolVar(&debugMode, "debug", false, "Enable debug output with detailed positions")
+	ocrReCmd.Flags().BoolVarP(&showLineNumbers, "line-numbers", "l", false, "Show line numbers with output")
+	ocrReCmd.Flags().BoolVar(&filterBlankLines, "filter", false, "Filter out blank lines from output")
 }
 
 // handleInteractiveTraining processes unrecognized characters using the beautiful new batch system
