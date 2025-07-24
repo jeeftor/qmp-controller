@@ -11,12 +11,24 @@ LDFLAGS := -ldflags "-s -w \
 	-X github.com/jeeftor/qmp-controller/cmd.buildCommit=$(GIT_COMMIT) \
 	-X github.com/jeeftor/qmp-controller/cmd.buildTime=$(BUILD_TIME)"
 
+# LDFLAGS with static linking for Linux builds
+LDFLAGS_STATIC := -ldflags "-s -w \
+	-X github.com/jeeftor/qmp-controller/cmd.buildVersion=$(GIT_TAG) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildCommit=$(GIT_COMMIT) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildTime=$(BUILD_TIME) \
+	-extldflags '-static'"
+
+
+
+utm-screenshot:
+	magick /Users/jstein/Library/Containers/com.utmapp.UTM/Data/Documents/Linux.utm/screenshot.png ./test_data/utm.ppm
+
 
 build-amd:
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a $(LDFLAGS) -ldflags '-extldflags "-static"' -o dist/qmp-controller-amd64
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a $(LDFLAGS_STATIC) -o dist/qmp-controller-amd64
 
 build-arm:
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a $(LDFLAGS) -ldflags '-extldflags "-static"' -o dist/qmp-controller-arm64
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -a $(LDFLAGS_STATIC) -o dist/qmp-controller-arm64
 
 build-mac-arm:
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -a $(LDFLAGS) -o dist/qmp-controller-darwin-arm64
@@ -32,7 +44,11 @@ scp: build-amd
 	scp ./dist/qmp-controller-amd64 pve3:~/qmp-controller &
 	scp ./dist/qmp-controller-amd64 pve4:~/qmp-controller &
 	cp ./dist/qmp-controller-amd64  /Users/jstein/devel/n2cx/secureUSB/qmp &
+	cp ./dist/qmp-controller-amd64  /Volumes/SecureUSB/dev/qmp	&
 	wait
+
+socat-tcp:
+	socat UNIX-LISTEN:/tmp/qmp-socket,fork TCP:localhost:5902
 
 socket-setup:
 	@echo "Setting up QMP socket forwards..."

@@ -44,20 +44,19 @@ Examples:
 		vmid := args[0]
 		key := args[1]
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 		defer client.Close()
 
-		if err := client.SendKey(key); err != nil {
+		err = logging.LogOperation("send_key", vmid, func() error {
+			logging.LogKeyboard(vmid, key, "single_key", 0)
+			return client.SendKey(key)
+		})
+
+		if err != nil {
 			fmt.Printf("Error sending key '%s' to VM %s: %v\n", key, vmid, err)
 			os.Exit(1)
 		}
@@ -80,24 +79,22 @@ Example:
 		// Join all remaining args to form the text
 		text := strings.Join(args[1:], " ")
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 		defer client.Close()
 
 		// Get the key delay from flag or config
 		delay := getKeyDelay()
-		logging.Debug("Using key delay", "delay", delay)
 
-		if err := client.SendString(text, delay); err != nil {
+		err = logging.LogOperation("send_text", vmid, func() error {
+			logging.LogKeyboard(vmid, text, "text_string", delay)
+			return client.SendString(text, delay)
+		})
+
+		if err != nil {
 			fmt.Printf("Error typing text to VM %s: %v\n", vmid, err)
 			os.Exit(1)
 		}
@@ -128,15 +125,9 @@ Example:
 	Run: func(cmd *cobra.Command, args []string) {
 		vmid := args[0]
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 		defer client.Close()
@@ -174,15 +165,9 @@ Examples:
 		vmid := args[0]
 		jsonStr := args[1]
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 		defer client.Close()
@@ -258,15 +243,9 @@ Examples:
 			os.Exit(1)
 		}
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 		defer client.Close()

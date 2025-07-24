@@ -5,12 +5,11 @@ import (
 	"io"
 	"strings"
 
-	fatihcolor "github.com/fatih/color"
-
 	"github.com/jeeftor/qmp-controller/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/styles"
 )
 
-// RenderBitmap renders a character bitmap to a string builder using fatih/color
+// RenderBitmap renders a character bitmap to a string builder using lipgloss
 // for consistent color output across the application
 func RenderBitmap(bitmap *ocr.CharacterBitmap, writer io.Writer, useColor bool) {
 	for bitmapY := 0; bitmapY < bitmap.Height; bitmapY++ {
@@ -20,7 +19,8 @@ func RenderBitmap(bitmap *ocr.CharacterBitmap, writer io.Writer, useColor bool) 
 				// and false for WHITE/BACKGROUND pixels
 				if bitmap.Data[bitmapY][bitmapX] {
 					// This is a foreground pixel (part of the character)
-					fatihcolor.New(fatihcolor.BgBlack).Fprint(writer, "  ")
+					blackBgStyle := styles.CreateBgStyle(0, 0, 0)
+					fmt.Fprint(writer, blackBgStyle.Render("  "))
 				} else {
 					// This is a background pixel
 					if useColor && bitmapY < len(bitmap.Colors) && bitmapX < len(bitmap.Colors[bitmapY]) && bitmap.Colors[bitmapY][bitmapX] != nil {
@@ -31,12 +31,13 @@ func RenderBitmap(bitmap *ocr.CharacterBitmap, writer io.Writer, useColor bool) 
 						g8 := uint8(g >> 8)
 						b8 := uint8(b >> 8)
 
-						// Use fatih/color for colored background
-						bgColor := fatihcolor.BgRGB(int(r8), int(g8), int(b8))
-						bgColor.Fprint(writer, "  ")
+						// Use lipgloss for colored background
+						bgStyle := styles.CreateBgStyle(r8, g8, b8)
+						fmt.Fprint(writer, bgStyle.Render("  "))
 					} else {
 						// Default background - gray
-						fatihcolor.New(fatihcolor.BgHiBlack).Fprint(writer, "  ")
+						grayBgStyle := styles.CreateBgStyle(128, 128, 128)
+						fmt.Fprint(writer, grayBgStyle.Render("  "))
 					}
 				}
 			}

@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
-	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -42,49 +40,73 @@ Examples:
 		vmid := args[0]
 		outputFile := args[1]
 
+		// Start timer for performance monitoring
+		timer := logging.StartTimer("screenshot", vmid)
+
+		// Create contextual logger
+		logger := logging.NewContextualLogger(vmid, "screenshot")
+
+		logger.Debug("Screenshot command started",
+			"output_file", outputFile,
+			"format_flag", screenshotFormat,
+			"remote_temp", remoteTempPath)
+
 		// Create output directory if it doesn't exist
 		outputDir := filepath.Dir(outputFile)
 		if outputDir != "." {
 			if err := os.MkdirAll(outputDir, 0755); err != nil {
-				fmt.Printf("Error creating output directory: %v\n", err)
+				logger.Error("Failed to create output directory",
+					"output_dir", outputDir,
+					"error", err)
+				timer.StopWithError(err, map[string]interface{}{
+					"stage": "directory_creation",
+				})
 				os.Exit(1)
 			}
+			logger.Debug("Created output directory", "output_dir", outputDir)
 		}
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			logger.Error("Failed to connect to VM", "error", err)
+			timer.StopWithError(err, map[string]interface{}{
+				"stage": "connection",
+			})
 			os.Exit(1)
 		}
 		defer client.Close()
 
 		// Get format from flag, config, or file extension
 		format := getScreenshotFormat(outputFile)
+		logger.Debug("Determined screenshot format", "format", format)
 
-		// Get remote temp path from flag or config
-		remotePath := getRemoteTempPath()
-
-		var err error
-		if format == "png" {
-			logging.Debug("Taking screenshot in PNG format", "output", outputFile, "remoteTempPath", remotePath)
-			err = client.ScreenDumpAndConvert(outputFile, remotePath)
-		} else {
-			logging.Debug("Taking screenshot in PPM format", "output", outputFile, "remoteTempPath", remotePath)
-			err = client.ScreenDump(outputFile, remotePath)
-		}
-
-		if err != nil {
-			fmt.Printf("Error taking screenshot: %v\n", err)
+		// Take screenshot using centralized helper
+		if err := TakeScreenshot(client, outputFile, format); err != nil {
+			logger.Error("Failed to take screenshot", "error", err)
+			timer.StopWithError(err, map[string]interface{}{
+				"stage": "screenshot_capture",
+				"format": format,
+			})
 			os.Exit(1)
 		}
 
-		fmt.Printf("Screenshot saved to %s\n", outputFile)
+		// Get file size for metrics
+		if stat, statErr := os.Stat(outputFile); statErr == nil {
+			duration := timer.Stop(true, map[string]interface{}{
+				"format": format,
+				"file_size": stat.Size(),
+				"output_path": outputFile,
+			})
+
+			logging.Success("Screenshot saved to %s (%s, %d bytes, %v)",
+				outputFile, format, stat.Size(), duration)
+		} else {
+			timer.Stop(true, map[string]interface{}{
+				"format": format,
+				"output_path": outputFile,
+			})
+			logging.Success("Screenshot saved to %s (%s)", outputFile, format)
+		}
 	},
 }
 
@@ -110,21 +132,6 @@ func getScreenshotFormat(outputFile string) string {
 	return "ppm"
 }
 
-// getRemoteTempPath determines the remote temp path to use based on flag or config
-func getRemoteTempPath() string {
-	// Priority 1: Command line flag
-	if remoteTempPath != "" {
-		return remoteTempPath
-	}
-
-	// Priority 2: Config file
-	if viper.IsSet("screenshot.remote_temp_path") {
-		return viper.GetString("screenshot.remote_temp_path")
-	}
-
-	// Default to empty string (local temp file)
-	return ""
-}
 
 func init() {
 	rootCmd.AddCommand(screenshotCmd)

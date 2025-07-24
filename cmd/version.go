@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
+	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/styles"
 	"github.com/spf13/cobra"
 )
 
@@ -79,42 +80,55 @@ var versionCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		displayVersion := GetDisplayVersion()
 
+		// Log version request for analytics
+		logging.Debug("Version command executed",
+			"version", buildVersion,
+			"display_version", displayVersion,
+			"commit", buildCommit,
+			"build_time", buildTime,
+			"short_output", shortOutput)
+
 		if shortOutput {
 			// For short output, just show the raw buildVersion for scripts
 			fmt.Println(buildVersion)
+			logging.Debug("Version output", "format", "short", "version", buildVersion)
 			return
 		}
-		versionColor := color.New(color.FgCyan, color.Bold)
-		buildColor := color.New(color.FgYellow)
-		commitColor := color.New(color.FgGreen)
-		osArchColor := color.New(color.FgMagenta)
-		goVersionColor := color.New(color.FgRed)
-		whiteColor := color.New(color.FgWhite)
-		pathColor := color.New(color.FgBlue)
 
-		whiteColor.Printf("Version: ")
-		versionColor.Printf("%s\n", displayVersion)
+		// Use lipgloss styles for consistent theming
+		labelStyle := styles.MutedStyle
+		versionStyle := styles.InfoStyle
+		buildStyle := styles.WarningStyle
+		commitStyle := styles.SuccessStyle
+		osArchStyle := styles.BoldStyle
+		goVersionStyle := styles.ErrorStyle
+		pathStyle := styles.DebugStyle
 
-		whiteColor.Printf("Built:   ")
-		buildColor.Printf("%s\n", GetFormattedBuildTime())
-
-		whiteColor.Printf("Commit:  ")
-		commitColor.Printf("%s\n", buildCommit)
-
-		whiteColor.Printf("OS/Arch: ")
-		osArchColor.Printf("%s/%s\n", runtime.GOOS, runtime.GOARCH)
-
-		whiteColor.Printf("Go:      ")
-		goVersionColor.Printf("%s\n", runtime.Version())
-
+		// Get executable path for metrics
 		exe, err := os.Executable()
 		exePath := "Unknown"
 		if err == nil {
 			exePath, _ = filepath.Abs(exe)
+		} else {
+			logging.Warn("Failed to get executable path", "error", err)
 		}
 
-		whiteColor.Printf("Binary:  ")
-		pathColor.Printf("%s\n", exePath)
+		// Log full version info for debugging
+		logging.Debug("Version information",
+			"display_version", displayVersion,
+			"build_time", GetFormattedBuildTime(),
+			"commit", buildCommit,
+			"os_arch", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+			"go_version", runtime.Version(),
+			"executable_path", exePath)
+
+		// Display formatted output
+		fmt.Printf("%s %s\n", labelStyle.Render("Version:"), versionStyle.Render(displayVersion))
+		fmt.Printf("%s %s\n", labelStyle.Render("Built:  "), buildStyle.Render(GetFormattedBuildTime()))
+		fmt.Printf("%s %s\n", labelStyle.Render("Commit: "), commitStyle.Render(buildCommit))
+		fmt.Printf("%s %s\n", labelStyle.Render("OS/Arch:"), osArchStyle.Render(fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)))
+		fmt.Printf("%s %s\n", labelStyle.Render("Go:     "), goVersionStyle.Render(runtime.Version()))
+		fmt.Printf("%s %s\n", labelStyle.Render("Binary: "), pathStyle.Render(exePath))
 	},
 }
 

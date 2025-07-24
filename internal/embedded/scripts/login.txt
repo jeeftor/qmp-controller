@@ -1,0 +1,24 @@
+# Example script demonstrating QMP script commands
+
+# Switch to console 2
+<# Console 2
+
+# Sleep for 1 second
+<# Sleep 1s
+echo "Testing WATCH command..."
+
+# Sleep for another second
+<# Sleep 1s
+echo "This will appear on screen"
+
+# Watch for text to appear with timeout and poll interval
+<# WATCH "Testing WATCH command" TIMEOUT 10s POLL 500ms
+
+echo "WATCH test completed!"
+
+# Other command examples:
+# Type text
+Type This text will be typed into the VM
+
+# Send a key press
+<# KEY ENTER

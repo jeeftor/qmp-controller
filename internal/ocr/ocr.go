@@ -18,7 +18,78 @@ import (
 	"strings"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/qmp"
 )
+
+// OCRConfig holds all OCR-related configuration options
+type OCRConfig struct {
+	// Screen dimensions
+	Columns int
+	Rows    int
+
+	// Processing modes
+	AnsiMode           bool
+	ColorMode          bool
+	SingleChar         bool
+	FilterBlankLines   bool
+	ShowLineNumbers    bool
+	UpdateTraining     bool
+	RenderSpecialChars bool
+
+	// Cropping configuration
+	CropEnabled  bool
+	CropRowsStr  string
+	CropColsStr  string
+	CropStartRow int
+	CropEndRow   int
+	CropStartCol int
+	CropEndCol   int
+
+	// Single character mode
+	CharRow int
+	CharCol int
+
+	// Training data
+	TrainingDataPath string
+}
+
+// NewOCRConfig creates a new OCR configuration with default values
+func NewOCRConfig() *OCRConfig {
+	return &OCRConfig{
+		Columns:     qmp.DEFAULT_WIDTH,
+		Rows:        qmp.DEFAULT_HEIGHT,
+		AnsiMode:    false,
+		ColorMode:   false,
+		CropEnabled: false,
+		SingleChar:  false,
+	}
+}
+
+// ValidateAndParse validates the configuration and parses string values
+// This method is kept for backward compatibility but now uses the centralized validation system
+func (cfg *OCRConfig) ValidateAndParse() error {
+	// Import validation package dynamically to avoid circular imports
+	// The comprehensive validation is now handled by the validation package
+	// This method provides basic validation for backward compatibility
+
+	// Basic screen dimension validation
+	if cfg.Columns <= 0 || cfg.Rows <= 0 {
+		return fmt.Errorf("screen dimensions must be positive: columns=%d, rows=%d", cfg.Columns, cfg.Rows)
+	}
+
+	// Basic single character validation
+	if cfg.SingleChar {
+		if cfg.CharRow < 0 || cfg.CharCol < 0 {
+			return fmt.Errorf("invalid character position: row=%d, col=%d", cfg.CharRow, cfg.CharCol)
+		}
+		if cfg.CharRow >= cfg.Rows || cfg.CharCol >= cfg.Columns {
+			return fmt.Errorf("character position out of bounds: row=%d (max %d), col=%d (max %d)",
+				cfg.CharRow, cfg.Rows-1, cfg.CharCol, cfg.Columns-1)
+		}
+	}
+
+	return nil
+}
 
 // CharacterBitmap represents a bitmap of a single character
 type CharacterBitmap struct {
@@ -43,8 +114,8 @@ type TrainingData struct {
 }
 
 // ProcessScreenshot processes a screenshot for OCR
-func ProcessScreenshot(screenshotPath string, width, height int, debug bool) (*OCRResult, error) {
-	return ProcessScreenshotWithTrainingData(screenshotPath, "", width, height, debug)
+func ProcessScreenshot(screenshotPath string, width, height int) (*OCRResult, error) {
+	return ProcessScreenshotWithTrainingData(screenshotPath, "", width, height)
 }
 
 // decodeImageFile opens and decodes an image file using netpbm first, then standard decoders
@@ -70,7 +141,7 @@ func decodeImageFile(screenshotPath string) (image.Image, error) {
 }
 
 // ProcessScreenshotWithTrainingData processes a screenshot for OCR with optional training data
-func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, width, height int, debug bool) (*OCRResult, error) {
+func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, width, height int) (*OCRResult, error) {
 	img, err := decodeImageFile(screenshotPath)
 	if err != nil {
 		return nil, err
@@ -121,28 +192,50 @@ func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, 
 	// Try to load training data
 	var trainingData *TrainingData
 	if trainingDataPath != "" {
+		// Convert to absolute path if needed
+		absPath, err := filepath.Abs(trainingDataPath)
+		if err != nil {
+			logging.Warn("Failed to convert training data path to absolute path",
+				"path", trainingDataPath,
+				"error", err)
+		} else {
+			trainingDataPath = absPath
+			logging.Debug("Using absolute training data path", "path", trainingDataPath)
+		}
+
 		trainingData, err = LoadTrainingData(trainingDataPath)
 		if err == nil && trainingData != nil {
 			// If training data exists, use it to recognize characters
-			logging.Info("Using training data for character recognition", "path", trainingDataPath)
+			logging.Info("Using training data for character recognition",
+				"path", trainingDataPath,
+				"characterCount", len(trainingData.BitmapMap))
 			if err := RecognizeCharacters(result, trainingData); err != nil {
 				logging.Warn("Character recognition failed", "error", err)
 			}
 		} else {
-			logging.Warn("No training data found, using basic recognition", "error", err)
+			logging.Warn("Failed to load training data",
+				"path", trainingDataPath,
+				"error", err)
 		}
 	} else {
 		// Try default location as fallback
-		defaultPath := filepath.Join(os.TempDir(), "qmp-ocr-training.json")
+		defaultPath := qmp.GetDefaultTrainingDataPath()
+		logging.Info("Using default training data location", "path", defaultPath)
+		logging.UserInfo("📂 Using default training data: %s", defaultPath)
+
 		trainingData, err = LoadTrainingData(defaultPath)
 		if err == nil && trainingData != nil {
 			// If training data exists, use it to recognize characters
-			logging.Info("Using default training data for character recognition", "path", defaultPath)
+			logging.Info("Using default training data for character recognition",
+				"path", defaultPath,
+				"characterCount", len(trainingData.BitmapMap))
 			if err := RecognizeCharacters(result, trainingData); err != nil {
 				logging.Warn("Character recognition failed", "error", err)
 			}
 		} else {
-			logging.Warn("No training data found, using basic recognition", "error", err)
+			logging.Warn("No training data found at default location",
+				"path", defaultPath,
+				"error", err)
 		}
 	}
 
@@ -151,14 +244,14 @@ func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, 
 
 // ProcessScreenshotWithCrop processes a screenshot for OCR with cropping
 func ProcessScreenshotWithCrop(screenshotPath string, width, height int,
-	startRow, endRow, startCol, endCol int, debug bool) (*OCRResult, error) {
+	startRow, endRow, startCol, endCol int) (*OCRResult, error) {
 	return ProcessScreenshotWithCropAndTrainingData(screenshotPath, "", width, height,
-		startRow, endRow, startCol, endCol, debug)
+		startRow, endRow, startCol, endCol)
 }
 
 // ProcessScreenshotWithCropAndTrainingData processes a screenshot for OCR with cropping and optional training data
 func ProcessScreenshotWithCropAndTrainingData(screenshotPath, trainingDataPath string, width, height int,
-	startRow, endRow, startCol, endCol int, debug bool) (*OCRResult, error) {
+	startRow, endRow, startCol, endCol int) (*OCRResult, error) {
 	img, err := decodeImageFile(screenshotPath)
 	if err != nil {
 		return nil, err
@@ -235,7 +328,8 @@ func ProcessScreenshotWithCropAndTrainingData(screenshotPath, trainingDataPath s
 		}
 	} else {
 		// Try default location as fallback
-		defaultPath := filepath.Join(os.TempDir(), "qmp-ocr-training.json")
+		defaultPath := qmp.GetDefaultTrainingDataPath()
+		logging.UserInfo("📂 Using default training data: %s", defaultPath)
 		trainingData, err = LoadTrainingData(defaultPath)
 		if err == nil && trainingData != nil {
 			// If training data exists, use it to recognize characters
@@ -334,7 +428,7 @@ func extractCharacterBitmap(img image.Image, x, y, cellWidth, cellHeight int) (C
 	}
 
 	// Initialize the bitmap data
-	for i := 0; i < cellHeight; i++ {
+	for i := range bitmap.Data {
 		bitmap.Data[i] = make([]bool, cellWidth)
 		bitmap.Colors[i] = make([]color.Color, cellWidth)
 	}
@@ -378,17 +472,9 @@ func extractCharacterBitmap(img image.Image, x, y, cellWidth, cellHeight int) (C
 }
 
 // SaveOCRResult saves OCR results to a file
-func SaveOCRResult(result *OCRResult, outputPath string, debug bool) error {
-	var output string
-
-	if debug {
-		// In debug mode, include ASCII representation and JSON data
-		output = formatDebugOutput(result)
-	} else {
-		// In normal mode, just include the recognized text
-		output = formatTextOutput(result)
-	}
-
+func SaveOCRResult(result *OCRResult, outputPath string) error {
+	// Always save as plain text output - debug visualization can be controlled via log level
+	output := formatTextOutput(result)
 	return os.WriteFile(outputPath, []byte(output), 0644)
 }
 
@@ -505,6 +591,17 @@ func createSortedTrainingData(data *TrainingData) map[string]interface{} {
 func LoadTrainingData(inputPath string) (*TrainingData, error) {
 	logging.Debug("Loading training data", "path", inputPath)
 
+	// Convert to absolute path if it's not empty
+	if inputPath != "" {
+		absPath, err := filepath.Abs(inputPath)
+		if err != nil {
+			logging.Warn("Failed to convert to absolute path", "path", inputPath, "error", err)
+		} else {
+			inputPath = absPath
+			logging.Debug("Converted to absolute path", "path", inputPath)
+		}
+	}
+
 	jsonData, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read training data: %v", err)
@@ -530,7 +627,9 @@ func LoadTrainingData(inputPath string) (*TrainingData, error) {
 		if count < 5 {
 			logging.Debug("Training data entry",
 				"hex", func() string {
-					if len(hex) > 20 { return hex[:20] + "..." }
+					if len(hex) > 20 {
+						return hex[:20] + "..."
+					}
 					return hex
 				}(),
 				"char", char)
@@ -578,7 +677,7 @@ func SaveBitmapAsPNG(bitmap CharacterBitmap, outputPath string) error {
 // ExtractTrainingData extracts training data from a screenshot with known characters
 func ExtractTrainingData(screenshotPath string, width, height int, knownChars string) (*TrainingData, error) {
 	// Process the screenshot
-	result, err := ProcessScreenshot(screenshotPath, width, height, true)
+	result, err := ProcessScreenshot(screenshotPath, width, height)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jeeftor/qmp-controller/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/spf13/cobra"
 )
 
@@ -17,31 +17,66 @@ var statusCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		vmid := args[0]
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
+		// Start timer and create contextual logger
+		timer := logging.StartTimer("status_query", vmid)
+		logger := logging.NewContextualLogger(vmid, "status")
 
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		logger.Debug("Status command started")
+
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			logger.Error("Failed to connect to VM", "error", err)
+			timer.StopWithError(err, map[string]interface{}{
+				"stage": "connection",
+			})
 			os.Exit(1)
 		}
 		defer client.Close()
 
 		status, err := client.QueryStatus()
 		if err != nil {
-			fmt.Printf("Error querying status for VM %s: %v\n", vmid, err)
+			logger.Error("Failed to query VM status", "error", err)
+			timer.StopWithError(err, map[string]interface{}{
+				"stage": "status_query",
+			})
 			os.Exit(1)
 		}
 
-		fmt.Printf("Status for VM %s:\n", vmid)
-		fmt.Printf("  Running: %v\n", status["running"])
-		fmt.Printf("  Status: %v\n", status["status"])
+		// Extract key status values for structured logging
+		running, runningOk := status["running"]
+		statusValue, statusOk := status["status"]
 
-		if debug, _ := cmd.Flags().GetBool("debug"); debug {
+		// Log structured status information
+		statusMetrics := map[string]interface{}{
+			"running_present": runningOk,
+			"status_present":  statusOk,
+		}
+
+		if runningOk {
+			statusMetrics["running"] = running
+		}
+		if statusOk {
+			statusMetrics["status"] = statusValue
+		}
+
+		logger.Info("VM status retrieved",
+			"running", running,
+			"status", statusValue,
+			"full_response", status)
+
+		duration := timer.Stop(true, statusMetrics)
+
+		// Display user-friendly output
+		logging.Result("Status for VM %s", vmid)
+		fmt.Printf("  Running: %v\n", running)
+		fmt.Printf("  Status: %v\n", statusValue)
+
+		// Debug output if requested
+		debugFlag, _ := cmd.Flags().GetBool("debug")
+		if debugFlag {
+			logger.Debug("Debug output requested", "full_status", status)
 			fmt.Printf("Debug - Full status response: %+v\n", status)
+			fmt.Printf("Debug - Query duration: %v\n", duration)
 		}
 	},
 }

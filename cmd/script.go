@@ -7,28 +7,30 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/ocr"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/script"
+	"github.com/jeeftor/qmp-controller/internal/validation"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 var (
-	scriptDelay   time.Duration
-	commentChar   string
-	controlChar   string
+	scriptDelay time.Duration
+	commentStr  string
+	controlStr  string
+	useTUI      bool
 
 	// WATCH command OCR settings
-	watchTrainingData string
-	watchWidth        int
-	watchHeight       int
+	scriptOCRConfig   = ocr.NewOCRConfig()
 	watchPollInterval time.Duration
 )
 
 // scriptCmd represents the script command
 var scriptCmd = &cobra.Command{
-	Use:   "script [vmid] [file]",
+	Use:   "script [vmid] [script-file] [training-data-file]",
 	Short: "Run a script of commands",
 	Long: `Run a script of commands on the VM.
 Each line in the script file is treated as a separate command to be executed.
@@ -44,9 +46,21 @@ Comments use configurable character (default: #):
   # This is a comment
   \# This types a literal # character
 
+Training Data Requirements:
+  Scripts containing WATCH commands or any OCR functionality require training data:
+  - Provide as third argument: qmp script [vmid] [script-file] [training-data-file]
+  - Or set in config file
+  The script will be pre-scanned for WATCH commands and validate requirements.
+
 Examples:
+  # Basic script execution (no OCR/WATCH commands)
   qmp script 106 /path/to/script.txt
-  qmp script 106 script.txt --comment-char "%" --control-char "<!
+
+  # Script with WATCH commands (training data as argument)
+  qmp script 106 script.txt training.json --columns 160 --rows 50
+
+  # Using custom comment/control characters
+  qmp script 106 script.txt training.json --comment-char "%" --control-char "<!
 
 Script file example:
   # Comments start with # (configurable)
@@ -56,43 +70,123 @@ Script file example:
   :w
   <# Key enter
   <# WATCH "saved" TIMEOUT 10s`,
-	Args: cobra.ExactArgs(2),
+	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		vmid := args[0]
 		scriptFile := args[1]
 
-		// Get configuration values
+		// Handle optional training data file argument
+		if len(args) >= 3 {
+			scriptOCRConfig.TrainingDataPath = args[2]
+			logging.Info("Using training data from argument", "path", args[2])
+		}
+
+		// Get configuration values early
 		commentPrefix := getCommentChar()
 		controlPrefix := getControlChar()
+		logging.Info("Script configuration", "comment_char", commentPrefix, "control_char", controlPrefix)
 		logging.Debug("Script configuration", "comment", commentPrefix, "control", controlPrefix)
 
-		// Open the script file
-		file, err := os.Open(scriptFile)
+		// Sync OCR configuration from flags early (this may override the argument)
+		syncScriptOCRConfig()
+
+		// Pre-scan script file to check for WATCH commands and validate training data
+		// Do this BEFORE connecting to VM to fail fast if requirements aren't met
+		hasWatchCommands, err := scanScriptForWatchCommands(scriptFile)
 		if err != nil {
-			fmt.Printf("Error opening script file: %v\n", err)
+			logging.Error("Failed to scan script file for WATCH commands", "script_file", scriptFile, "error", err)
 			os.Exit(1)
 		}
-		defer file.Close()
 
-		// Connect to the VM
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
+		// Validate training data is available if WATCH commands are present
+		if hasWatchCommands {
+			if err := validateWatchRequirements(); err != nil {
+				logging.Error("WATCH command requirements validation failed",
+					"script_file", scriptFile,
+					"error", err,
+					"solution", "Use --training-data flag or set in config file")
+				os.Exit(1)
+			}
+
+			// Additional validation for WATCH commands and remote connections
+			validator := validation.NewConfigValidator()
+			remoteTempPath := getRemoteTempPath()
+			socketPath := viper.GetString("socket") // Get socket path from config
+
+			socketValidation := validator.ValidateSocketPath(socketPath, remoteTempPath)
+			if !socketValidation.Valid {
+				logging.Error("Socket configuration validation failed for WATCH commands",
+					"script_file", scriptFile,
+					"socket_path", socketPath,
+					"remote_temp_path", remoteTempPath,
+					"validation_errors", len(socketValidation.Errors))
+
+				fmt.Fprint(os.Stderr, validation.FormatValidationErrors(socketValidation))
+				os.Exit(1)
+			}
+
+			// Log socket validation warnings
+			if len(socketValidation.Warnings) > 0 {
+				for _, warning := range socketValidation.Warnings {
+					logging.Warn("Socket configuration warning", "warning", warning)
+				}
+			}
 		}
 
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
+		// Connect to the VM (only after validation passes)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			logging.Error("Failed to connect to VM", "vmid", vmid, "error", err)
 			os.Exit(1)
 		}
 		defer client.Close()
+
+		// Initialize the WATCH function pointer for the command pattern
+		script.PerformWatchCheckFunc = performWatchCheck
+
+		// Check if TUI mode is requested
+		if useTUI {
+			// Parse script file for TUI
+			lines, err := parseScriptFile(scriptFile)
+			if err != nil {
+				logging.Error("Failed to parse script file for TUI mode", "script_file", scriptFile, "error", err)
+				os.Exit(1)
+			}
+
+			// Create and run TUI
+			model := NewScriptTUIModel(vmid, client, scriptFile, lines)
+			p := tea.NewProgram(model, tea.WithAltScreen())
+			if _, err := p.Run(); err != nil {
+				logging.Error("TUI execution failed", "vmid", vmid, "script_file", scriptFile, "error", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		// Original console mode execution
+		// Open the script file
+		file, err := os.Open(scriptFile)
+		if err != nil {
+			logging.Error("Failed to open script file", "script_file", scriptFile, "error", err)
+			os.Exit(1)
+		}
+		defer file.Close()
 
 		// Get the key delay from flag or config
 		delay := getScriptDelay()
 		logging.Debug("Using key delay for script", "delay", delay)
 
-		// Process the script line by line
+		// Create script context for command execution
+		ctx := &script.ScriptContext{
+			VMId:             vmid,
+			ScriptFile:       scriptFile,
+			TrainingDataPath: scriptOCRConfig.TrainingDataPath,
+			OCRColumns:       scriptOCRConfig.Columns,
+			OCRRows:          scriptOCRConfig.Rows,
+			Delay:            delay,
+		}
+
+		// Process the script line by line using the command pattern
 		scanner := bufio.NewScanner(file)
 		lineNum := 0
 		for scanner.Scan() {
@@ -112,96 +206,159 @@ Script file example:
 				line = processedLine // It had escaped comment chars, use processed version
 			}
 
-			// Check for control commands using configurable prefix
-			if strings.HasPrefix(line, controlPrefix) {
-				command := strings.TrimSpace(line[len(controlPrefix):]) // Remove control prefix
-				parts := strings.Fields(command)
-				if len(parts) > 0 {
-					switch strings.ToLower(parts[0]) {
-					case "sleep":
-						if len(parts) != 2 {
-							fmt.Printf("Line %d: Invalid sleep command format. Use <# Sleep N>\n", lineNum)
-							continue
-						}
-						var seconds float64
-						_, err := fmt.Sscanf(parts[1], "%f", &seconds)
-						if err != nil {
-							fmt.Printf("Line %d: Invalid sleep duration: %v\n", lineNum, err)
-							continue
-						}
-						sleepDuration := time.Duration(seconds * float64(time.Second))
-						logging.Debug("Sleeping", "duration", sleepDuration)
-						time.Sleep(sleepDuration)
-					case "key":
-						// Handle key combinations like <# Key ctrl-alt-del>
-						if len(parts) < 2 {
-							fmt.Printf("Line %d: Invalid key command format. Use <# Key combination>\n", lineNum)
-							continue
-						}
-						keyCombo := strings.Join(parts[1:], " ")
-						logging.Info("Sending key combination", "keys", keyCombo)
-						if err := client.SendKey(keyCombo); err != nil {
-							fmt.Printf("Line %d: Error sending key combination '%s': %v\n", lineNum, keyCombo, err)
-							continue
-						}
-					case "watch":
-						// Handle WATCH commands like <# WATCH "string" TIMEOUT 30s>
-						if err := processWatchCommand(parts, lineNum, client); err != nil {
-							fmt.Printf("Line %d: %v\n", lineNum, err)
-							continue
-						}
-					case "console":
-						// Handle console switching like <# Console 1>
-						if len(parts) != 2 {
-							fmt.Printf("Line %d: Invalid console command format. Use <# Console 1-6>\n", lineNum)
-							continue
-						}
-						consoleNum := parts[1]
-						// Validate console number
-						if consoleNum < "1" || consoleNum > "6" {
-							fmt.Printf("Line %d: Console number must be between 1 and 6, got: %s\n", lineNum, consoleNum)
-							continue
-						}
-						// Build the F-key name (f1, f2, etc.)
-						fKey := fmt.Sprintf("f%s", consoleNum)
-						// Send Ctrl+Alt+F[1-6] combination
-						logging.Info("Switching to console", "console", consoleNum)
-						if err := client.SendKeyCombo([]string{"ctrl", "alt", fKey}); err != nil {
-							fmt.Printf("Line %d: Error switching to console %s: %v\n", lineNum, consoleNum, err)
-							continue
-						}
-					default:
-						fmt.Printf("Line %d: Unknown control command: %s\n", lineNum, parts[0])
-						fmt.Printf("Available commands: Sleep, Key, Console, Watch\n")
-					}
+			// Update context with current line number
+			ctx.LineNumber = lineNum
+
+			// Parse the line into a command using the command pattern
+			cmd, err := script.ParseScriptCommand(line, lineNum)
+			if err != nil {
+				logging.Error("Failed to parse script command",
+					"vmid", vmid,
+					"script_file", scriptFile,
+					"line_number", lineNum,
+					"line_content", line,
+					"error", err)
+				continue
+			}
+
+			// Validate the command
+			if err := cmd.Validate(); err != nil {
+				logging.Error("Script command validation failed",
+					"vmid", vmid,
+					"script_file", scriptFile,
+					"line_number", lineNum,
+					"command", cmd.String(),
+					"error", err)
+				continue
+			}
+
+			// Execute the command
+			if err := cmd.Execute(client, ctx); err != nil {
+				logging.Error("Script command execution failed",
+					"vmid", vmid,
+					"script_file", scriptFile,
+					"line_number", lineNum,
+					"command", cmd.String(),
+					"error", err)
+				continue
+			}
+
+			// For TYPE commands, send Enter after each command (maintaining backward compatibility)
+			if _, isType := cmd.(*script.TypeCommand); isType {
+				if err := client.SendKey("ret"); err != nil {
+					logging.Error("Failed to send return key after TYPE command",
+						"vmid", vmid,
+						"script_file", scriptFile,
+						"line_number", lineNum,
+						"error", err)
 					continue
 				}
+				// Small delay between commands
+				time.Sleep(100 * time.Millisecond)
 			}
-
-			// Regular line - send as keyboard input
-			logging.Info("Executing line", "line", line)
-			if err := client.SendString(line, delay); err != nil {
-				fmt.Printf("Line %d: Error sending text: %v\n", lineNum, err)
-				continue
-			}
-
-			// Send Enter after each command
-			if err := client.SendKey("ret"); err != nil {
-				fmt.Printf("Line %d: Error sending return key: %v\n", lineNum, err)
-				continue
-			}
-
-			// Small delay between commands
-			time.Sleep(100 * time.Millisecond)
 		}
 
 		if err := scanner.Err(); err != nil {
-			fmt.Printf("Error reading script file: %v\n", err)
+			logging.Error("Error occurred while reading script file", "script_file", scriptFile, "error", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Script execution completed for VM %s\n", vmid)
+		logging.Info("Script execution completed successfully", "vmid", vmid, "script_file", scriptFile)
 	},
+}
+
+// scanScriptForWatchCommands scans a script file to detect if it contains WATCH commands
+func scanScriptForWatchCommands(scriptFile string) (bool, error) {
+	file, err := os.Open(scriptFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to open script file: %v", err)
+	}
+	defer file.Close()
+
+	commentPrefix := getCommentChar()
+	controlPrefix := getControlChar()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines
+		if line == "" {
+			continue
+		}
+
+		// Handle comments and escaped comment characters
+		if processedLine, isComment := processCommentLine(line, commentPrefix); isComment {
+			if processedLine == "" {
+				continue // It was a pure comment, skip
+			}
+			line = processedLine // It had escaped comment chars, use processed version
+		}
+
+		// Check if this line is a control command
+		if strings.HasPrefix(line, controlPrefix) {
+			// Remove the control prefix and parse the command
+			commandPart := strings.TrimSpace(line[len(controlPrefix):])
+			if strings.HasPrefix(strings.ToUpper(commandPart), "WATCH ") {
+				logging.Debug("Found WATCH command in script", "line", line)
+				return true, nil
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("error reading script file: %v", err)
+	}
+
+	return false, nil
+}
+
+// validateWatchRequirements checks that all requirements for WATCH commands are met
+func validateWatchRequirements() error {
+	// Check training data path
+	if scriptOCRConfig.TrainingDataPath == "" {
+		return fmt.Errorf("WATCH commands require training data file")
+	}
+
+	// Check that training data file exists
+	if _, err := os.Stat(scriptOCRConfig.TrainingDataPath); os.IsNotExist(err) {
+		return fmt.Errorf("training data file does not exist: %s", scriptOCRConfig.TrainingDataPath)
+	}
+
+	// Check screen dimensions
+	if scriptOCRConfig.Columns <= 0 || scriptOCRConfig.Rows <= 0 {
+		return fmt.Errorf("WATCH commands require valid screen dimensions (columns: %d, rows: %d)",
+			scriptOCRConfig.Columns, scriptOCRConfig.Rows)
+	}
+
+	logging.Debug("WATCH requirements validated",
+		"trainingData", scriptOCRConfig.TrainingDataPath,
+		"columns", scriptOCRConfig.Columns,
+		"rows", scriptOCRConfig.Rows)
+
+	return nil
+}
+
+// syncScriptOCRConfig populates the script OCR config from command flags and config
+func syncScriptOCRConfig() {
+	// Update OCR config from flags and config values
+	// Training data path is only set via command line argument or config file (no flag)
+
+	if widthFlag := viper.GetInt("script.watch_width"); widthFlag > 0 {
+		scriptOCRConfig.Columns = widthFlag
+	}
+
+	if heightFlag := viper.GetInt("script.watch_height"); heightFlag > 0 {
+		scriptOCRConfig.Rows = heightFlag
+	}
+
+	// Check config file for training data if not provided as argument
+	if scriptOCRConfig.TrainingDataPath == "" {
+		if configPath := viper.GetString("ocr.training_data"); configPath != "" {
+			scriptOCRConfig.TrainingDataPath = configPath
+			logging.Debug("Training data path from config", "path", configPath)
+		}
+	}
 }
 
 // getScriptDelay determines the key delay to use based on flag or config
@@ -270,8 +427,8 @@ func isValidKeyCombo(combo string) bool {
 
 // getCommentChar returns the comment character from flag or config
 func getCommentChar() string {
-	if commentChar != "" {
-		return commentChar
+	if commentStr != "" {
+		return commentStr
 	}
 	if viper.IsSet("script.comment_char") {
 		return viper.GetString("script.comment_char")
@@ -281,13 +438,13 @@ func getCommentChar() string {
 
 // getControlChar returns the control character prefix from flag or config
 func getControlChar() string {
-	if controlChar != "" {
-		return controlChar
+	if controlStr != "" {
+		return controlStr
 	}
 	if viper.IsSet("script.control_char") {
 		return viper.GetString("script.control_char")
 	}
-	return "<#"
+	return "<! "
 }
 
 // processCommentLine handles comment processing and escape sequences
@@ -350,17 +507,17 @@ func processWatchCommand(parts []string, lineNum int, client *qmp.Client) error 
 	logging.Info("Executing WATCH command", "string", watchString, "timeout", timeout)
 
 	// Get WATCH configuration
-	trainingData := getWatchTrainingData()
+	trainingData := getOCRTrainingData()
 	width := getWatchWidth()
 	height := getWatchHeight()
 	pollInterval := getWatchPollInterval()
 
 	if trainingData == "" {
-		return fmt.Errorf("WATCH command requires training data. Use --watch-training-data flag or set in config")
+		return fmt.Errorf("WATCH command requires training data. Use --training-data flag or set in config")
 	}
 
 	if width <= 0 || height <= 0 {
-		return fmt.Errorf("WATCH command requires valid screen dimensions. Use --watch-width and --watch-height flags")
+		return fmt.Errorf("WATCH command requires valid screen dimensions. Use --columns and --watchrows")
 	}
 
 	logging.Debug("WATCH configuration", "trainingData", trainingData, "width", width, "height", height, "pollInterval", pollInterval)
@@ -379,6 +536,10 @@ func processWatchCommand(parts []string, lineNum int, client *qmp.Client) error 
 			// Continue trying on errors
 		} else if found {
 			logging.Info("WATCH string found", "string", watchString, "elapsed", time.Since(startTime))
+			// Log success and provide user feedback
+			logging.Info("WATCH condition satisfied",
+				"search_string", watchString,
+				"elapsed_time", time.Since(startTime).Round(time.Millisecond))
 			fmt.Printf("✓ Found '%s' after %v\n", watchString, time.Since(startTime).Round(time.Millisecond))
 			return nil
 		}
@@ -394,25 +555,16 @@ func processWatchCommand(parts []string, lineNum int, client *qmp.Client) error 
 
 // performWatchCheck takes a screenshot, runs OCR, and searches for the target string
 func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string, width, height int) (bool, error) {
-	// Create a temporary file for the screenshot
-	tmpFile, err := os.CreateTemp("", "qmp-watch-*.ppm")
+	// Take temporary screenshot using centralized helper
+	tmpFile, err := TakeTemporaryScreenshot(client, "qmp-watch")
 	if err != nil {
-		return false, fmt.Errorf("error creating temporary file: %v", err)
+		return false, err
 	}
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	// Get remote temp path from flag or config
-	remotePath := getRemoteTempPath()
-
-	// Take a screenshot
-	logging.Debug("Taking screenshot for WATCH", "output", tmpFile.Name(), "remoteTempPath", remotePath)
-	if err := client.ScreenDump(tmpFile.Name(), remotePath); err != nil {
-		return false, fmt.Errorf("error taking screenshot: %v", err)
-	}
-
 	// Process the screenshot with OCR
-	result, err := ocr.ProcessScreenshotWithTrainingData(tmpFile.Name(), trainingDataPath, width, height, false)
+	result, err := ocr.ProcessScreenshotWithTrainingData(tmpFile.Name(), trainingDataPath, width, height)
 	if err != nil {
 		return false, fmt.Errorf("error processing screenshot for OCR: %v", err)
 	}
@@ -422,7 +574,6 @@ func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string,
 		IgnoreCase:  false, // Could be made configurable
 		FirstOnly:   true,  // Just need to know if it exists
 		Quiet:       true,  // Don't output search results
-		Debug:       false,
 		LineNumbers: false,
 	}
 
@@ -431,34 +582,16 @@ func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string,
 }
 
 // Helper functions to get WATCH configuration values
-func getWatchTrainingData() string {
-	if watchTrainingData != "" {
-		return watchTrainingData
-	}
-	if viper.IsSet("script.watch_training_data") {
-		return viper.GetString("script.watch_training_data")
-	}
-	return ""
+func getOCRTrainingData() string {
+	return scriptOCRConfig.TrainingDataPath
 }
 
 func getWatchWidth() int {
-	if watchWidth > 0 {
-		return watchWidth
-	}
-	if viper.IsSet("script.watch_width") {
-		return viper.GetInt("script.watch_width")
-	}
-	return 80 // Default
+	return scriptOCRConfig.Columns
 }
 
 func getWatchHeight() int {
-	if watchHeight > 0 {
-		return watchHeight
-	}
-	if viper.IsSet("script.watch_height") {
-		return viper.GetInt("script.watch_height")
-	}
-	return 25 // Default
+	return scriptOCRConfig.Rows
 }
 
 func getWatchPollInterval() time.Duration {
@@ -471,24 +604,136 @@ func getWatchPollInterval() time.Duration {
 	return 1 * time.Second // Default: check every second
 }
 
+// scriptSampleCmd shows a sample script with all available features
+var scriptSampleCmd = &cobra.Command{
+	Use:   "sample",
+	Short: "Display a sample script showcasing all available features",
+	Long: `Display a comprehensive sample script that demonstrates all available
+features of the original script command including:
+
+- Basic text typing
+- Control commands (WATCH, Console switching, Key sequences, Sleep)
+- Comment syntax and escape sequences
+- Configurable comment and control characters
+- WATCH command with timeout and OCR integration
+
+This sample is kept up-to-date with all implemented features.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		sample := `# Sample QMP Script - Original Script Command
+# This demonstrates all features available in the original script command
+#
+# Comments start with # (configurable with --comment-char)
+# Control commands start with <# (configurable with --control-char)
+# To type a literal # character, use \#
+
+# Basic text typing - each line is sent to the VM followed by Enter
+ssh user@remote-server
+
+# WATCH command - wait for text to appear on screen with timeout
+# Requires training data: qmp script 106 sample.script training.json
+<# WATCH "password:" TIMEOUT 10s
+
+# Type password (this line will be typed as-is)
+mypassword123
+
+# Send special keys
+<# Key enter
+
+# Sleep/wait commands
+<# Sleep 2
+
+# Console switching (Ctrl+Alt+F1 through F6)
+<# Console 1
+
+# More complex key combinations
+<# Key ctrl-c
+<# Key esc
+<# Key tab
+
+# Wait for login prompt
+<# WATCH "$ " TIMEOUT 30s
+
+# Run some commands
+ls -la
+<# Sleep 1
+
+# Check system status
+systemctl status
+<# Sleep 2
+
+# Switch to another console
+<# Console 2
+
+# Login on second console
+<# WATCH "login:" TIMEOUT 15s
+admin
+<# WATCH "password:" TIMEOUT 10s
+adminpass
+
+# Wait for shell prompt
+<# WATCH "$ " TIMEOUT 10s
+
+# Run monitoring command
+top
+<# Sleep 3
+<# Key q
+
+# Example of typing literal comment character
+echo "This line has a \# character in it"
+
+# Complex WATCH example with longer timeout
+<# WATCH "Process completed successfully" TIMEOUT 60s
+
+# End of sample script
+echo "Script execution completed"
+<# Key enter`
+
+		fmt.Println("=== Sample QMP Script (Original Script Command) ===")
+		fmt.Println()
+		fmt.Println(sample)
+		fmt.Println()
+		fmt.Println("=== Usage Examples ===")
+		fmt.Println()
+		fmt.Printf("# Save sample to file:\n")
+		fmt.Printf("qmp script sample > my-script.txt\n\n")
+		fmt.Printf("# Execute script (no OCR/WATCH commands):\n")
+		fmt.Printf("qmp script 106 my-script.txt\n\n")
+		fmt.Printf("# Execute script with WATCH commands (requires training data):\n")
+		fmt.Printf("qmp script 106 my-script.txt training.json\n\n")
+		fmt.Printf("# Custom comment/control characters:\n")
+		fmt.Printf("qmp script 106 my-script.txt --comment-char \"%%\" --control-char \"<!\"\n\n")
+		fmt.Printf("# Interactive TUI mode:\n")
+		fmt.Printf("qmp script 106 my-script.txt training.json --tui\n\n")
+		fmt.Printf("=== Key Features ===\n")
+		fmt.Printf("• Most lines typed directly to VM (followed by Enter)\n")
+		fmt.Printf("• <# WATCH \"text\" TIMEOUT 30s - Wait for screen text (requires training data)\n")
+		fmt.Printf("• <# Console N - Switch to console 1-6 (Ctrl+Alt+F[N])\n")
+		fmt.Printf("• <# Key combo - Send special keys (enter, esc, ctrl-c, etc.)\n")
+		fmt.Printf("• <# Sleep N - Pause execution for N seconds\n")
+		fmt.Printf("• # Comments (configurable character)\n")
+		fmt.Printf("• \\# Literal comment character in text\n")
+		fmt.Printf("• Configurable syntax via --comment-char and --control-char flags\n")
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(scriptCmd)
+	scriptCmd.AddCommand(scriptSampleCmd)
 	scriptCmd.Flags().DurationVarP(&scriptDelay, "delay", "l", 0, "delay between key presses (default 50ms)")
-	scriptCmd.Flags().StringVar(&commentChar, "comment-char", "#", "character that starts comment lines")
-	scriptCmd.Flags().StringVar(&controlChar, "control-char", "<#", "prefix for control commands")
+	scriptCmd.Flags().StringVar(&commentStr, "comment-char", "#", "character that starts comment lines")
+	scriptCmd.Flags().StringVar(&controlStr, "control-char", "<#", "prefix for control commands")
+	scriptCmd.Flags().BoolVar(&useTUI, "tui", false, "use interactive TUI mode for script execution")
 
 	// WATCH command flags
-	scriptCmd.Flags().StringVar(&watchTrainingData, "watch-training-data", "", "training data file for WATCH command OCR")
-	scriptCmd.Flags().IntVar(&watchWidth, "watch-width", 80, "screen width for WATCH command OCR")
-	scriptCmd.Flags().IntVar(&watchHeight, "watch-height", 25, "screen height for WATCH command OCR")
+	scriptCmd.Flags().IntVarP(&scriptOCRConfig.Columns, "columns", "c", qmp.DEFAULT_WIDTH, "screen width for WATCH command OCR")
+	scriptCmd.Flags().IntVarP(&scriptOCRConfig.Rows, "rows", "r", qmp.DEFAULT_HEIGHT, "screen height for WATCH command OCR")
 	scriptCmd.Flags().DurationVar(&watchPollInterval, "watch-poll-interval", time.Second, "poll interval for WATCH command")
 
 	// Bind flags to viper
 	viper.BindPFlag("script.delay", scriptCmd.Flags().Lookup("delay"))
 	viper.BindPFlag("script.comment_char", scriptCmd.Flags().Lookup("comment-char"))
 	viper.BindPFlag("script.control_char", scriptCmd.Flags().Lookup("control-char"))
-	viper.BindPFlag("script.watch_training_data", scriptCmd.Flags().Lookup("watch-training-data"))
-	viper.BindPFlag("script.watch_width", scriptCmd.Flags().Lookup("watch-width"))
-	viper.BindPFlag("script.watch_height", scriptCmd.Flags().Lookup("watch-height"))
+	viper.BindPFlag("script.watch_width", scriptCmd.Flags().Lookup("columns"))
+	viper.BindPFlag("script.watch_height", scriptCmd.Flags().Lookup("rows"))
 	viper.BindPFlag("script.watch_poll_interval", scriptCmd.Flags().Lookup("watch-poll-interval"))
 }
