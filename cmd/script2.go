@@ -20,7 +20,7 @@ var (
 
 // script2Cmd represents the enhanced script command
 var script2Cmd = &cobra.Command{
-	Use:   "script2 [vmid] [script-file]",
+	Use:   "script2 [vmid] [script-file] [training-data-file]",
 	Short: "Execute enhanced scripts with variables and conditionals",
 	Long: `Execute enhanced scripts that support:
 
@@ -65,10 +65,17 @@ Examples:
 
   # Debug mode with detailed logging
   qmp script2 106 login.script --debug --log-level debug`,
-	Args: cobra.MinimumNArgs(2),
+	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		vmid := args[0]
 		scriptFile := args[1]
+
+		// Handle optional training data file argument
+		var trainingDataPath string
+		if len(args) >= 3 {
+			trainingDataPath = args[2]
+			logging.Info("Using training data from argument", "path", trainingDataPath)
+		}
 
 		// Create contextual logger
 		logger := logging.NewContextualLogger(vmid, "script2")
@@ -165,15 +172,17 @@ Examples:
 
 			// Create execution context for dry run
 			context := &script2.ExecutionContext{
-				VMID:      vmid,
-				Variables: variables,
-				Timeout:   timeout,
-				DryRun:    true,
-				Debug:     logger.Debug != nil,
+				VMID:         vmid,
+				Variables:    variables,
+				Timeout:      timeout,
+				DryRun:       true,
+				Debug:        logger.Debug != nil,
+				TrainingData: trainingDataPath,
 			}
 
 			executor := script2.NewExecutor(context, logger.Debug != nil)
 			executor.SetParser(parser) // Set parser for validation
+			executor.SetScript(script) // Set script for function access
 
 			result, err := executor.Execute(script)
 			if err != nil {
@@ -225,17 +234,19 @@ Examples:
 
 		// Create execution context
 		context := &script2.ExecutionContext{
-			Client:    client,
-			VMID:      vmid,
-			Variables: variables,
-			Timeout:   timeout,
-			DryRun:    false,
-			Debug:     logger.Debug != nil,
+			Client:       client,
+			VMID:         vmid,
+			Variables:    variables,
+			Timeout:      timeout,
+			DryRun:       false,
+			Debug:        logger.Debug != nil,
+			TrainingData: trainingDataPath,
 		}
 
 		// Execute script
 		executor := script2.NewExecutor(context, logger.Debug != nil)
 		executor.SetParser(parser)
+		executor.SetScript(script) // Set script for function access
 
 		logging.Progress("Executing script %s on VM %s", scriptFile, vmid)
 
@@ -339,6 +350,44 @@ echo "Backup user would be: $BACKUP_USER"
 LOG_LEVEL=${LOG_LEVEL:+debug}
 ${LOG_LEVEL:+echo "Debug mode enabled"}
 
+# Basic conditional execution (checks current screen and executes following lines)
+<if-found "$ " 5s>
+echo "Shell prompt is visible, continuing..."
+ls -la
+
+<if-not-found "error" 5s>
+echo "No error message detected, proceeding..."
+systemctl status
+
+# Conditional execution with else blocks
+<if-found "login:" 10s>
+echo "Login prompt found, logging in..."
+$USER
+<watch "password:" 5s>
+$PASSWORD
+<enter>
+<else>
+echo "No login prompt found, trying to connect..."
+ssh $USER@$TARGET_HOST
+
+# Loop constructs for automation
+<retry 3>
+ping -c 1 google.com
+echo "Ping successful"
+
+<repeat 5>
+echo "This will be repeated 5 times"
+<wait 1s>
+
+# While loops with OCR monitoring
+<while-not-found "login:" 30s poll 2s>
+echo "Waiting for login prompt..."
+<wait 2s>
+
+<while-found "loading..." 60s poll 1s>
+echo "Still loading, please wait..."
+<wait 3s>
+
 # Watch for shell prompt
 <watch "$ " 10s>
 
@@ -348,9 +397,19 @@ uname -a
 
 # Check if we need elevated access
 sudo -l
-<watch "password" 5s>
+
+# Take screenshot before attempting sudo
+<screenshot "before-sudo-{timestamp}.png">
+
+# Conditional password handling
+<if-found "password" 5s>
+echo "Password required for sudo"
+<screenshot "password-prompt.png">
 $PASSWORD
 <enter>
+<else>
+echo "No password required, continuing with sudo commands"
+<screenshot "no-password-needed.png">
 
 # Wait for sudo to complete
 <watch "$ " 10s>
@@ -390,7 +449,62 @@ echo "Script completed for user: $USER on host: $TARGET_HOST"
 # Exit sequences
 <ctrl+d>
 <wait 1s>
-exit`
+exit
+
+# Example of conditional exit with error codes
+<if-found "error" 5s>
+echo "Error detected, exiting with error code"
+<exit 1>
+
+<if-found "critical failure" 5s>
+echo "Critical failure detected!"
+<exit 2>
+
+# Include functionality - execute other script files
+<include "common-functions.script2">
+<include "environment-setup.script2">
+
+# Screenshot functionality for debugging and evidence
+<screenshot "login-screen.png">
+<screenshot "before-update_{timestamp}.png">
+<screenshot "system-status.jpg">
+<screenshot "debug-{datetime}.ppm">
+
+# Screenshots with variables and timestamps
+SCREENSHOT_DIR=${SCREENSHOT_DIR:-./screenshots}
+<screenshot "$SCREENSHOT_DIR/final-state-{timestamp}.png">
+
+# Function definitions for reusable code blocks
+<function login_attempt>
+ssh $1@$2
+<watch "password:" 10s>
+$3
+<enter>
+<wait 2s>
+<end-function>
+
+# Function with OCR and error handling
+<function check_login_status>
+<if-found "$ " 5s>
+echo "Login successful for user: $1"
+<screenshot "login-success-$1.png">
+<else>
+echo "Login failed for user: $1"
+<screenshot "login-failed-$1.png">
+<exit 1>
+<end-function>
+
+# Using functions with parameters
+<call login_attempt $USER $TARGET_HOST $PASSWORD>
+<call check_login_status $USER>
+
+# Functions can be called multiple times with different parameters
+<call login_attempt admin backup-server secret123>
+<call check_login_status admin>
+
+# Example of escaping directive syntax (to type literal angle brackets)
+echo "To wait in a script, use: \\<wait 5s>"
+echo "To exit with code 1: \\<exit 1>"`
 
 		fmt.Println("=== Sample Enhanced Script2 ===")
 		fmt.Println()
@@ -417,6 +531,19 @@ exit`
 		fmt.Printf("• <console N> - Switch to console 1-6\n")
 		fmt.Printf("• <enter>, <tab>, <ctrl+c> - Special key sequences\n")
 		fmt.Printf("• <wait 5s> - Pause execution\n")
+		fmt.Printf("• <if-found \"text\" 5s>, <if-not-found \"text\" 5s> - Conditional execution blocks\n")
+		fmt.Printf("• <retry N> - Retry block N times on failure\n")
+		fmt.Printf("• <repeat N> - Repeat block N times unconditionally\n")
+		fmt.Printf("• <while-found \"text\" 30s poll 1s> - Loop while text is present\n")
+		fmt.Printf("• <while-not-found \"text\" 30s poll 1s> - Loop until text appears\n")
+		fmt.Printf("• <exit N> - Exit script with specified exit code\n")
+		fmt.Printf("• <else> - Else block for if-found/if-not-found conditionals\n")
+		fmt.Printf("• <include \"script.txt\"> - Include and execute another script file\n")
+		fmt.Printf("• <screenshot \"filename.png\"> - Take screenshot (supports png, jpg, ppm)\n")
+		fmt.Printf("• Screenshot timestamps: {timestamp}, {date}, {time}, {datetime}, {unix}\n")
+		fmt.Printf("• <function name>, <end-function> - Define reusable functions\n")
+		fmt.Printf("• <call function_name args...> - Call functions with parameters ($1, $2, etc.)\n")
+		fmt.Printf("• \\<directive> - Escape syntax to type literal angle brackets\n")
 		fmt.Printf("• Environment variable integration (--env-file, --var)\n")
 		fmt.Printf("• Dry run validation (--dry-run)\n")
 		fmt.Printf("• Advanced variable expansion with defaults and conditionals\n")

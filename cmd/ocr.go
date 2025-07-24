@@ -892,15 +892,15 @@ var ocrFindCmd = &cobra.Command{
 
 // ocrFindVMCmd represents the ocr find vm command
 var ocrFindVMCmd = &cobra.Command{
-	Use:   fmt.Sprintf("vm [%s] [%s] [%s]", ArgString, ArgTrainingData, ArgVMID),
+	Use:   fmt.Sprintf("vm [%s] [%s] [%s]", ArgVMID, ArgTrainingData, ArgString),
 	Short: "Search for a string in VM console OCR results",
-	Long: fmt.Sprintf("%s from a VM console.\n\nExamples:\n  # Search for \"Login successful\" in VM console\n  qmp ocr find vm \"Login successful\" training.json 123\n\n  # Search for \"error\" (case-insensitive, first match only)\n  qmp ocr find vm \"error\" training.json 123 --ignore-case --first\n\n  # Search with debug output and line numbers\n  qmp ocr find vm \"root@\" training.json 123 --log-level debug --line-numbers",
+	Long: fmt.Sprintf("%s from a VM console.\n\nExamples:\n  # Search for \"Login successful\" in VM console\n  qmp ocr find vm 123 training.json \"Login successful\"\n\n  # Search for \"error\" (case-insensitive, first match only)\n  qmp ocr find vm 123 training.json \"error\" --ignore-case --first\n\n  # Search with debug output and line numbers\n  qmp ocr find vm 123 training.json \"root@\" --log-level debug --line-numbers",
 		fmt.Sprintf(SearchDescription, ArgString)),
 	Args: cobra.ExactArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		searchString := args[0]
+		vmid := args[0]
 		trainingDataPath := args[1]
-		vmid := args[2]
+		searchString := args[2]
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
 		if err != nil {
@@ -930,15 +930,15 @@ var ocrFindVMCmd = &cobra.Command{
 
 // ocrFindFileCmd represents the ocr find file command
 var ocrFindFileCmd = &cobra.Command{
-	Use:   fmt.Sprintf("file [%s] [%s] [%s]", ArgString, ArgTrainingData, ArgInputImageFile),
+	Use:   fmt.Sprintf("file [%s] [%s] [%s]", ArgInputImageFile, ArgTrainingData, ArgString),
 	Short: "Search for a string in image file OCR results",
-	Long: fmt.Sprintf("%s from an %s.\n\nExamples:\n  # Search for \"Login successful\" in image file\n  qmp ocr find file \"Login successful\" training.json screenshot.ppm\n\n  # Search for \"error\" (case-insensitive, first match only)\n  qmp ocr find file \"error\" training.json screenshot.ppm --ignore-case --first\n\n  # Search with debug output and line numbers\n  qmp ocr find file \"root@\" training.json screenshot.ppm --log-level debug --line-numbers",
+	Long: fmt.Sprintf("%s from an %s.\n\nExamples:\n  # Search for \"Login successful\" in image file\n  qmp ocr find file screenshot.ppm training.json \"Login successful\"\n\n  # Search for \"error\" (case-insensitive, first match only)\n  qmp ocr find file screenshot.ppm training.json \"error\" --ignore-case --first\n\n  # Search with debug output and line numbers\n  qmp ocr find file screenshot.ppm training.json \"root@\" --log-level debug --line-numbers",
 		fmt.Sprintf(SearchDescription, ArgString), ArgInputImageFile),
 	Args: cobra.ExactArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		searchString := args[0]
+		inputImageFile := args[0]
 		trainingDataPath := args[1]
-		inputImageFile := args[2]
+		searchString := args[2]
 
 		result, err := processOCRResult(inputImageFile, trainingDataPath, false)
 		if err != nil {
@@ -977,15 +977,15 @@ var ocrReCmd = &cobra.Command{
 
 // ocrReVMCmd represents the ocr re vm command
 var ocrReVMCmd = &cobra.Command{
-	Use:   fmt.Sprintf("vm [%s] [%s] [%s]", ArgPattern, ArgTrainingData, ArgVMID),
+	Use:   fmt.Sprintf("vm [%s] [%s] [%s]", ArgVMID, ArgTrainingData, ArgPattern),
 	Short: "Search for a regex pattern in VM console OCR results",
-	Long: fmt.Sprintf("%s from a VM console.\n\nExamples:\n  # Search for IP addresses\n  qmp ocr re vm \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\" training.json 123\n\n  # Search for login attempts (with capture groups and debug output)\n  qmp ocr re vm \"Login (successful|failed)\" training.json 123 --log-level debug\n\n  # Search for errors (case-insensitive, first match only)\n  qmp ocr re vm \"[Ee]rror.*connection\" training.json 123 --first",
+	Long: fmt.Sprintf("%s from a VM console.\n\nExamples:\n  # Search for IP addresses\n  qmp ocr re vm 123 training.json \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\"\n\n  # Search for login attempts (with capture groups and debug output)\n  qmp ocr re vm 123 training.json \"Login (successful|failed)\" --log-level debug\n\n  # Search for errors (case-insensitive, first match only)\n  qmp ocr re vm 123 training.json \"[Ee]rror.*connection\" --first",
 		fmt.Sprintf(RegexDescription, ArgPattern)),
 	Args: cobra.ExactArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		pattern := args[0]
+		vmid := args[0]
 		trainingDataPath := args[1]
-		vmid := args[2]
+		pattern := args[2]
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
 		if err != nil {
@@ -1020,15 +1020,15 @@ var ocrReVMCmd = &cobra.Command{
 
 // ocrReFileCmd represents the ocr re file command
 var ocrReFileCmd = &cobra.Command{
-	Use:   fmt.Sprintf("file [%s] [%s] [%s]", ArgPattern, ArgTrainingData, ArgInputImageFile),
+	Use:   fmt.Sprintf("file [%s] [%s] [%s]", ArgInputImageFile, ArgTrainingData, ArgPattern),
 	Short: "Search for a regex pattern in image file OCR results",
-	Long: fmt.Sprintf("%s from an %s.\n\nExamples:\n  # Search for IP addresses\n  qmp ocr re file \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\" training.json screenshot.ppm\n\n  # Search for login attempts (with capture groups and debug output)\n  qmp ocr re file \"Login (successful|failed)\" training.json screenshot.ppm --log-level debug\n\n  # Search for errors (case-insensitive, first match only)\n  qmp ocr re file \"[Ee]rror.*connection\" training.json screenshot.ppm --first",
+	Long: fmt.Sprintf("%s from an %s.\n\nExamples:\n  # Search for IP addresses\n  qmp ocr re file screenshot.ppm training.json \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\"\n\n  # Search for login attempts (with capture groups and debug output)\n  qmp ocr re file screenshot.ppm training.json \"Login (successful|failed)\" --log-level debug\n\n  # Search for errors (case-insensitive, first match only)\n  qmp ocr re file screenshot.ppm training.json \"[Ee]rror.*connection\" --first",
 		fmt.Sprintf(RegexDescription, ArgPattern), ArgInputImageFile),
 	Args: cobra.ExactArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		pattern := args[0]
+		inputImageFile := args[0]
 		trainingDataPath := args[1]
-		inputImageFile := args[2]
+		pattern := args[2]
 
 		result, err := processOCRResult(inputImageFile, trainingDataPath, false)
 		if err != nil {

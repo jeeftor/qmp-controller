@@ -13,8 +13,11 @@ var (
 	// Variable assignment: USER=value or USER=${USER:-default}
 	variableAssignmentRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
-	// Directive patterns: <something>
+	// Directive patterns: <something> but not \<something>
 	directiveRegex = regexp.MustCompile(`^<(.+)>$`)
+
+	// Escaped directive patterns: \<something>
+	escapedDirectiveRegex = regexp.MustCompile(`^\\<(.+)>$`)
 
 	// Comment lines starting with #
 	commentRegex = regexp.MustCompile(`^\s*#`)
@@ -36,6 +39,22 @@ var (
 
 	// Exit command: exit 1
 	exitRegex = regexp.MustCompile(`^exit\s+(\d+)$`)
+
+	// Loop directives
+	retryRegex = regexp.MustCompile(`^retry\s+(\d+)$`)
+	repeatRegex = regexp.MustCompile(`^repeat\s+(\d+)$`)
+	whileFoundRegex = regexp.MustCompile(`^while-found\s+"([^"]+)"\s+(\d+s?)\s*(?:poll\s+(\d+(?:\.\d+)?s?))?$`)
+	whileNotFoundRegex = regexp.MustCompile(`^while-not-found\s+"([^"]+)"\s+(\d+s?)\s*(?:poll\s+(\d+(?:\.\d+)?s?))?$`)
+
+	// Additional directives
+	elseRegex = regexp.MustCompile(`^else$`)
+	includeRegex = regexp.MustCompile(`^include\s+"([^"]+)"$`)
+	screenshotRegex = regexp.MustCompile(`^screenshot\s+"([^"]+)"(?:\s+(png|ppm|jpg))?$`)
+
+	// Function directives
+	functionDefRegex = regexp.MustCompile(`^function\s+([a-zA-Z_][a-zA-Z0-9_]*)$`)
+	endFunctionRegex = regexp.MustCompile(`^end-function$`)
+	functionCallRegex = regexp.MustCompile(`^call\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(.+))?$`)
 )
 
 // ParseScript parses a complete script2 file
@@ -44,6 +63,7 @@ func (p *Parser) ParseScript(content string) (*Script, error) {
 	script := &Script{
 		Variables:   make(map[string]string),
 		Environment: make(map[string]string),
+		Functions:   make(map[string]*Function),
 		Lines:       make([]ParsedLine, 0, len(lines)),
 	}
 
@@ -53,12 +73,53 @@ func (p *Parser) ParseScript(content string) (*Script, error) {
 
 	p.currentLine = 0
 
-	for i, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		p.currentLine = i + 1
 
 		parsedLine, err := p.ParseLine(line, i+1)
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+
+		// Handle function definitions specially
+		if parsedLine.Type == DirectiveLine && parsedLine.Directive != nil && parsedLine.Directive.Type == FunctionDef {
+			// Parse function definition starting from next line
+			function, nextIndex, err := p.parseFunctionDefinition(lines, i, parsedLine.Directive.FunctionName)
+			if err != nil {
+				return nil, fmt.Errorf("line %d: %w", i+1, err)
+			}
+
+			// Add function to script
+			script.Functions[function.Name] = function
+			script.Metadata.FunctionLines += len(function.Lines)
+
+			// Skip the lines we've already processed
+			i = nextIndex - 1 // -1 because the for loop will increment
+			continue // Don't add function definition lines to main script
+		}
+
+		// Handle directives that require block parsing
+		if parsedLine.Type == DirectiveLine && parsedLine.Directive != nil {
+			directiveType := parsedLine.Directive.Type
+			if directiveType == ConditionalIfFound || directiveType == ConditionalIfNotFound ||
+			   directiveType == Retry || directiveType == Repeat ||
+			   directiveType == WhileFound || directiveType == WhileNotFound {
+				// Parse block starting from next line
+				blockLines, elseBlock, nextIndex, err := p.parseDirectiveBlockWithElse(lines, i+1, directiveType)
+				if err != nil {
+					return nil, fmt.Errorf("line %d: %w", i+1, err)
+				}
+
+				// Set the block and optional else block in the directive
+				parsedLine.Directive.Block = blockLines
+				if len(elseBlock) > 0 {
+					parsedLine.Directive.ElseBlock = elseBlock
+				}
+
+				// Skip the lines we've already processed
+				i = nextIndex - 1 // -1 because the for loop will increment
+			}
 		}
 
 		// Update metadata counters
@@ -84,6 +145,12 @@ func (p *Parser) ParseScript(content string) (*Script, error) {
 
 	// Extract all variable names used in the script
 	script.Metadata.Variables = p.extractAllVariables(script)
+
+	// Extract function names
+	script.Metadata.Functions = make([]string, 0, len(script.Functions))
+	for funcName := range script.Functions {
+		script.Metadata.Functions = append(script.Metadata.Functions, funcName)
+	}
 
 	return script, nil
 }
@@ -123,8 +190,14 @@ func (p *Parser) ParseLine(line string, lineNumber int) (ParsedLine, error) {
 		}
 
 	case TextLine:
+		// Handle escaped directives by removing the backslash
+		text := trimmedLine
+		if escapedDirectiveRegex.MatchString(trimmedLine) {
+			text = strings.TrimPrefix(trimmedLine, "\\")
+		}
+
 		// Expand variables in text lines
-		expanded, err := p.variables.Expand(trimmedLine)
+		expanded, err := p.variables.Expand(text)
 		if err != nil {
 			return parsedLine, fmt.Errorf("variable expansion failed: %w", err)
 		}
@@ -150,6 +223,11 @@ func (p *Parser) classifyLine(line string) LineType {
 
 	if variableAssignmentRegex.MatchString(line) {
 		return VariableLine
+	}
+
+	// Check for escaped directives first (they become text)
+	if escapedDirectiveRegex.MatchString(line) {
+		return TextLine
 	}
 
 	if directiveRegex.MatchString(line) {
@@ -291,6 +369,157 @@ func (p *Parser) parseDirectiveContent(directive *Directive, content string) err
 		return p.parseConditionalDirective(directive, content)
 	}
 
+	// Retry directive: retry 3
+	if matches := retryRegex.FindStringSubmatch(content); len(matches) >= 2 {
+		directive.Type = Retry
+		retryCount, err := strconv.Atoi(matches[1])
+		if err != nil {
+			return fmt.Errorf("invalid retry count: %s", matches[1])
+		}
+		directive.RetryCount = retryCount
+		return nil
+	}
+
+	// Repeat directive: repeat 5
+	if matches := repeatRegex.FindStringSubmatch(content); len(matches) >= 2 {
+		directive.Type = Repeat
+		repeatCount, err := strconv.Atoi(matches[1])
+		if err != nil {
+			return fmt.Errorf("invalid repeat count: %s", matches[1])
+		}
+		directive.RepeatCount = repeatCount
+		return nil
+	}
+
+	// While-found directive: while-found "text" 30s poll 1s
+	if matches := whileFoundRegex.FindStringSubmatch(content); len(matches) >= 3 {
+		directive.Type = WhileFound
+		directive.SearchText = matches[1]
+
+		// Parse timeout
+		timeoutStr := matches[2]
+		if !strings.HasSuffix(timeoutStr, "s") {
+			timeoutStr += "s"
+		}
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			return fmt.Errorf("invalid timeout in while-found: %s", matches[2])
+		}
+		directive.Timeout = timeout
+
+		// Parse optional poll interval
+		if len(matches) > 3 && matches[3] != "" {
+			pollStr := matches[3]
+			if !strings.HasSuffix(pollStr, "s") {
+				pollStr += "s"
+			}
+			poll, err := time.ParseDuration(pollStr)
+			if err != nil {
+				return fmt.Errorf("invalid poll interval in while-found: %s", matches[3])
+			}
+			directive.PollInterval = poll
+		} else {
+			directive.PollInterval = 1 * time.Second // Default poll interval
+		}
+		return nil
+	}
+
+	// While-not-found directive: while-not-found "text" 30s poll 1s
+	if matches := whileNotFoundRegex.FindStringSubmatch(content); len(matches) >= 3 {
+		directive.Type = WhileNotFound
+		directive.SearchText = matches[1]
+
+		// Parse timeout
+		timeoutStr := matches[2]
+		if !strings.HasSuffix(timeoutStr, "s") {
+			timeoutStr += "s"
+		}
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			return fmt.Errorf("invalid timeout in while-not-found: %s", matches[2])
+		}
+		directive.Timeout = timeout
+
+		// Parse optional poll interval
+		if len(matches) > 3 && matches[3] != "" {
+			pollStr := matches[3]
+			if !strings.HasSuffix(pollStr, "s") {
+				pollStr += "s"
+			}
+			poll, err := time.ParseDuration(pollStr)
+			if err != nil {
+				return fmt.Errorf("invalid poll interval in while-not-found: %s", matches[3])
+			}
+			directive.PollInterval = poll
+		} else {
+			directive.PollInterval = 1 * time.Second // Default poll interval
+		}
+		return nil
+	}
+
+	// Else directive: else
+	if elseRegex.MatchString(content) {
+		directive.Type = Else
+		return nil
+	}
+
+	// Include directive: include "script.txt"
+	if matches := includeRegex.FindStringSubmatch(content); len(matches) >= 2 {
+		directive.Type = Include
+		directive.IncludePath = matches[1]
+		return nil
+	}
+
+	// Screenshot directive: screenshot "filename.png" [format]
+	if matches := screenshotRegex.FindStringSubmatch(content); len(matches) >= 2 {
+		directive.Type = Screenshot
+		directive.ScreenshotPath = matches[1]
+
+		// Set format based on extension or explicit format
+		if len(matches) > 2 && matches[2] != "" {
+			directive.ScreenshotFormat = matches[2]
+		} else {
+			// Auto-detect format from file extension
+			if strings.HasSuffix(strings.ToLower(directive.ScreenshotPath), ".png") {
+				directive.ScreenshotFormat = "png"
+			} else if strings.HasSuffix(strings.ToLower(directive.ScreenshotPath), ".jpg") ||
+					  strings.HasSuffix(strings.ToLower(directive.ScreenshotPath), ".jpeg") {
+				directive.ScreenshotFormat = "jpg"
+			} else {
+				directive.ScreenshotFormat = "ppm" // Default format
+			}
+		}
+		return nil
+	}
+
+	// Function definition: function name
+	if matches := functionDefRegex.FindStringSubmatch(content); len(matches) >= 2 {
+		directive.Type = FunctionDef
+		directive.FunctionName = matches[1]
+		return nil
+	}
+
+	// End function: end-function
+	if endFunctionRegex.MatchString(content) {
+		directive.Type = EndFunction
+		return nil
+	}
+
+	// Function call: call function_name args...
+	if matches := functionCallRegex.FindStringSubmatch(content); len(matches) >= 2 {
+		directive.Type = FunctionCall
+		directive.FunctionName = matches[1]
+
+		// Parse arguments if present
+		if len(matches) > 2 && matches[2] != "" {
+			// Split arguments on whitespace, respecting quotes
+			directive.FunctionArgs = parseArguments(matches[2])
+		} else {
+			directive.FunctionArgs = []string{}
+		}
+		return nil
+	}
+
 	return fmt.Errorf("unknown directive type: %s", content)
 }
 
@@ -403,4 +632,186 @@ func (p *Parser) ValidateScript(script *Script) ValidationResult {
 	}
 
 	return result
+}
+
+// parseDirectiveBlock parses lines following a directive that contains a block
+func (p *Parser) parseDirectiveBlock(lines []string, startIndex int, directiveType DirectiveType) ([]ParsedLine, int, error) {
+	var blockLines []ParsedLine
+	i := startIndex
+
+	// Parse lines until we hit another directive, empty line, or end of script
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+
+		// Stop at empty lines or comments (these end the conditional block)
+		if line == "" || strings.HasPrefix(line, "#") {
+			break
+		}
+
+		// Stop at directives (these end the conditional block)
+		if strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") {
+			break
+		}
+
+		// Parse this line as part of the conditional block
+		parsedLine, err := p.ParseLine(lines[i], i+1)
+		if err != nil {
+			return nil, i, fmt.Errorf("error parsing conditional block line %d: %w", i+1, err)
+		}
+
+		// Only include text and variable lines in conditional blocks
+		// Skip empty lines and comments within blocks
+		if parsedLine.Type == TextLine || parsedLine.Type == VariableLine {
+			blockLines = append(blockLines, parsedLine)
+		}
+
+		i++
+	}
+
+	return blockLines, i, nil
+}
+
+// parseDirectiveBlockWithElse parses lines following a conditional directive, including optional else block
+func (p *Parser) parseDirectiveBlockWithElse(lines []string, startIndex int, directiveType DirectiveType) ([]ParsedLine, []ParsedLine, int, error) {
+	var blockLines []ParsedLine
+	var elseBlockLines []ParsedLine
+	i := startIndex
+	foundElse := false
+
+	// Parse lines until we hit another directive, empty line, or end of script
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+
+		// Stop at empty lines or comments (these end the conditional block)
+		if line == "" || strings.HasPrefix(line, "#") {
+			break
+		}
+
+		// Check for else directive
+		if line == "<else>" {
+			if directiveType != ConditionalIfFound && directiveType != ConditionalIfNotFound {
+				return nil, nil, i, fmt.Errorf("else directive only allowed after if-found or if-not-found")
+			}
+			foundElse = true
+			i++ // Skip the else line
+			continue
+		}
+
+		// Stop at other directives (these end the conditional block)
+		if strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") {
+			break
+		}
+
+		// Parse this line as part of the block
+		parsedLine, err := p.ParseLine(lines[i], i+1)
+		if err != nil {
+			return nil, nil, i, fmt.Errorf("error parsing block line %d: %w", i+1, err)
+		}
+
+		// Only include text and variable lines in blocks
+		if parsedLine.Type == TextLine || parsedLine.Type == VariableLine {
+			if foundElse {
+				elseBlockLines = append(elseBlockLines, parsedLine)
+			} else {
+				blockLines = append(blockLines, parsedLine)
+			}
+		}
+
+		i++
+	}
+
+	return blockLines, elseBlockLines, i, nil
+}
+
+// parseFunctionDefinition parses a function definition and its body
+func (p *Parser) parseFunctionDefinition(lines []string, startIndex int, functionName string) (*Function, int, error) {
+	function := &Function{
+		Name:      functionName,
+		Lines:     make([]ParsedLine, 0),
+		Defined:   true,
+		LineStart: startIndex + 1,
+	}
+
+	i := startIndex + 1 // Skip the function definition line
+
+	// Parse function body until end-function
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+
+		// Check for end-function
+		if line == "<end-function>" {
+			function.LineEnd = i + 1
+			return function, i + 1, nil // Return next index after end-function
+		}
+
+		// Skip empty lines and comments in function body
+		if line == "" || strings.HasPrefix(line, "#") {
+			i++
+			continue
+		}
+
+		// Parse the line as part of the function body
+		parsedLine, err := p.ParseLine(lines[i], i+1)
+		if err != nil {
+			return nil, i, fmt.Errorf("error parsing function body line %d: %w", i+1, err)
+		}
+
+		// Only include meaningful lines in function body
+		if parsedLine.Type != EmptyLine && parsedLine.Type != CommentLine {
+			function.Lines = append(function.Lines, parsedLine)
+		}
+
+		i++
+	}
+
+	return nil, i, fmt.Errorf("function '%s' missing end-function", functionName)
+}
+
+// parseArguments parses function call arguments, respecting quotes
+func parseArguments(argString string) []string {
+	var args []string
+	var current strings.Builder
+	inQuotes := false
+	escaped := false
+
+	for _, char := range argString {
+		switch char {
+		case '\\':
+			if escaped {
+				current.WriteRune('\\')
+				escaped = false
+			} else {
+				escaped = true
+			}
+		case '"':
+			if escaped {
+				current.WriteRune('"')
+				escaped = false
+			} else {
+				inQuotes = !inQuotes
+			}
+		case ' ', '\t':
+			if escaped {
+				current.WriteRune(char)
+				escaped = false
+			} else if inQuotes {
+				current.WriteRune(char)
+			} else if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			if escaped {
+				current.WriteRune('\\')
+				escaped = false
+			}
+			current.WriteRune(char)
+		}
+	}
+
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args
 }

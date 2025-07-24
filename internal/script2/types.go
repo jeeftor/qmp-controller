@@ -50,6 +50,16 @@ const (
 	ConditionalWatch                // <watch "text" 5s || { ... }>
 	ConditionalIfFound             // <if-found "text" 5s>
 	ConditionalIfNotFound          // <if-not-found "text" 5s>
+	Else                           // <else>
+	Retry                          // <retry 3>
+	Repeat                         // <repeat 5>
+	WhileFound                     // <while-found "text" 30s>
+	WhileNotFound                  // <while-not-found "text" 30s>
+	Include                        // <include "script.txt">
+	Screenshot                     // <screenshot "filename.png">
+	FunctionDef                    // <function name>
+	EndFunction                    // <end-function>
+	FunctionCall                   // <call function_name args...>
 )
 
 // String returns a human-readable representation of the DirectiveType
@@ -71,6 +81,26 @@ func (dt DirectiveType) String() string {
 		return "if_found"
 	case ConditionalIfNotFound:
 		return "if_not_found"
+	case Else:
+		return "else"
+	case Retry:
+		return "retry"
+	case Repeat:
+		return "repeat"
+	case WhileFound:
+		return "while_found"
+	case WhileNotFound:
+		return "while_not_found"
+	case Include:
+		return "include"
+	case Screenshot:
+		return "screenshot"
+	case FunctionDef:
+		return "function_def"
+	case EndFunction:
+		return "end_function"
+	case FunctionCall:
+		return "function_call"
 	default:
 		return "unknown"
 	}
@@ -89,6 +119,14 @@ type Directive struct {
 	Block       []ParsedLine     `json:"block,omitempty"`   // For conditional blocks
 	ElseBlock   []ParsedLine     `json:"else_block,omitempty"` // For else conditions
 	Condition   string           `json:"condition"`         // Condition expression
+	RetryCount  int              `json:"retry_count"`       // For retry directives
+	RepeatCount int              `json:"repeat_count"`      // For repeat directives
+	PollInterval time.Duration   `json:"poll_interval"`     // For while loops
+	IncludePath string           `json:"include_path"`      // For include directives
+	ScreenshotPath string        `json:"screenshot_path"`   // For screenshot directives
+	ScreenshotFormat string      `json:"screenshot_format"` // Screenshot format (png, ppm, jpg)
+	FunctionName string          `json:"function_name"`     // For function definition and calls
+	FunctionArgs []string        `json:"function_args"`     // For function call arguments
 }
 
 // ParsedLine represents a single parsed line from a script2 file
@@ -103,11 +141,21 @@ type ParsedLine struct {
 	Indent       int               `json:"indent"`            // Indentation level
 }
 
+// Function represents a parsed function definition
+type Function struct {
+	Name      string        `json:"name"`
+	Lines     []ParsedLine  `json:"lines"`
+	Defined   bool          `json:"defined"`
+	LineStart int           `json:"line_start"` // For error reporting
+	LineEnd   int           `json:"line_end"`   // For error reporting
+}
+
 // Script represents a complete parsed script2 file
 type Script struct {
 	Lines         []ParsedLine      `json:"lines"`
 	Variables     map[string]string `json:"variables"`         // Script-defined variables
 	Environment   map[string]string `json:"environment"`       // Environment variables
+	Functions     map[string]*Function `json:"functions"`      // Function definitions
 	Metadata      ScriptMetadata    `json:"metadata"`
 }
 
@@ -118,8 +166,18 @@ type ScriptMetadata struct {
 	TextLines     int               `json:"text_lines"`
 	DirectiveLines int              `json:"directive_lines"`
 	VariableLines int               `json:"variable_lines"`
+	FunctionLines int               `json:"function_lines"`
 	ParsedAt      time.Time         `json:"parsed_at"`
 	Variables     []string          `json:"variables"`         // List of variable names used
+	Functions     []string          `json:"functions"`         // List of function names defined
+}
+
+// FunctionCallContext holds context for function execution
+type FunctionCallContext struct {
+	FunctionName string            `json:"function_name"`
+	Parameters   []string          `json:"parameters"`
+	LocalVars    map[string]string `json:"local_vars"`
+	CallLine     int               `json:"call_line"`          // Line where function was called
 }
 
 // ExecutionContext holds the runtime context for script execution
@@ -133,6 +191,7 @@ type ExecutionContext struct {
 	DryRun        bool              `json:"dry_run"`
 	Debug         bool              `json:"debug"`
 	TrainingData  string            `json:"training_data"`      // Path to OCR training data file
+	FunctionStack []*FunctionCallContext `json:"function_stack"` // For nested function calls
 }
 
 // VariableExpander handles bash-style variable expansion
@@ -171,6 +230,7 @@ func NewParser(variables *VariableExpander, debug bool) *Parser {
 type Executor struct {
 	context  *ExecutionContext
 	parser   *Parser
+	script   *Script
 	debug    bool
 }
 
@@ -185,6 +245,11 @@ func NewExecutor(context *ExecutionContext, debug bool) *Executor {
 // SetParser sets the parser for the executor (needed for validation)
 func (e *Executor) SetParser(parser *Parser) {
 	e.parser = parser
+}
+
+// SetScript sets the script for the executor (needed for function access)
+func (e *Executor) SetScript(script *Script) {
+	e.script = script
 }
 
 // ExecutionResult represents the result of script execution
