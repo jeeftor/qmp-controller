@@ -49,8 +49,27 @@ build-mac-arm:
 
 build: build-arm build-amd build-mac-arm
 
+build-with-vscode: build vscode-extension
+
 clean:
 	rm -rf dist
+	rm -rf vscode-extension/*.vsix
+
+# VSCode Extension Generation
+vscode-extension:
+	@echo "🎨 Generating VSCode extension..."
+	go run main.go generate-vscode-grammar
+	@echo "📦 Building VSCode extension..."
+	cd vscode-extension && npm install --silent && npm run package
+	@echo "✅ VSCode extension built: vscode-extension/qmp-script2-*.vsix"
+
+vscode-install: vscode-extension
+	@echo "🔧 Installing VSCode extension..."
+	cd vscode-extension && code --install-extension qmp-script2-*.vsix
+	@echo "✅ VSCode extension installed!"
+
+vscode-clean:
+	rm -rf vscode-extension/*.vsix vscode-extension/node_modules
 
 scp: build-amd
 	scp ./dist/qmp-controller-amd64 pve1:~/qmp-controller &
@@ -172,4 +191,4 @@ clean-socket: socket-cleanup
 debug-socket: socket-debug
 clean-simple: socket-simple-cleanup
 
-.PHONY: clean build-amd build-arm build-mac-arm build scp socket-setup socket-simple socket-simple-cleanup socket-test socket-test-manual socket-cleanup socket-status socket test-socket clean-socket socket-debug socket-manual debug-socket socket-simple-start clean-simple test-manual
+.PHONY: clean build-amd build-arm build-mac-arm build build-with-vscode scp socket-setup socket-simple socket-simple-cleanup socket-test socket-test-manual socket-cleanup socket-status socket test-socket clean-socket socket-debug socket-manual debug-socket socket-simple-start clean-simple test-manual vscode-extension vscode-install vscode-clean

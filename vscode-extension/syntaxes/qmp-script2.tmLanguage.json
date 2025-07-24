@@ -1,0 +1,359 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "QMP Script2",
+  "scopeName": "source.qmp-script2",
+  "fileTypes": [
+    "sc2",
+    "script2",
+    "qmp2"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#directives"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#strings"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.hash.qmp-script2",
+          "match": "^\\s*#.*$"
+        }
+      ]
+    },
+    "composition": {
+      "patterns": [
+        {
+          "name": "keyword.control.import.qmp-script2",
+          "match": "^include\\s+\"([^\"]+)\"$"
+        }
+      ]
+    },
+    "conditionals": {
+      "patterns": [
+        {
+          "name": "keyword.control.conditional.else.qmp-script2",
+          "match": "^else$"
+        }
+      ]
+    },
+    "control": {
+      "patterns": [
+        {
+          "name": "support.function.system.console.qmp-script2",
+          "match": "^console\\s+([1-6])$"
+        },
+        {
+          "name": "keyword.control.flow.exit.qmp-script2",
+          "match": "^exit\\s+(\\d+)$"
+        },
+        {
+          "name": "support.function.timing.wait.qmp-script2",
+          "match": "^wait\\s+(\\d+)s?$"
+        },
+        {
+          "name": "keyword.control.conditional.watch.qmp-script2",
+          "match": "^watch\\s+\"([^\"]+)\"\\s+(\\d+s?)\\s*(\\|\\||\u0026\u0026|$)"
+        }
+      ]
+    },
+    "debugging": {
+      "patterns": [
+        {
+          "name": "support.function.debug.screenshot.qmp-script2",
+          "match": "^screenshot\\s+\"([^\"]+)\"(?:\\s+(png|ppm|jpg))?$"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "name": "support.function.key.navigation.qmp-script2",
+          "match": "\u003c(enter|tab|space|escape|backspace|delete|up|down|left|right|home|end|page_up|page_down)\u003e"
+        },
+        {
+          "name": "support.function.key.modifier.qmp-script2",
+          "match": "\u003c(ctrl|alt|shift)\\+([a-z])\u003e",
+          "captures": {
+            "1": {
+              "name": "support.function.key.modifier.name.qmp-script2"
+            },
+            "2": {
+              "name": "support.function.key.modifier.key.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "support.function.key.function.qmp-script2",
+          "match": "\u003c(f[1-9][0-9]?)\u003e"
+        },
+        {
+          "name": "meta.conditional.qmp-script2",
+          "match": "\u003c(watch|if-found|if-not-found)\\s+(\"[^\"]*\")\\s+(\\d+s?)\u003e",
+          "captures": {
+            "1": {
+              "name": "keyword.control.conditional.qmp-script2"
+            },
+            "2": {
+              "name": "string.quoted.double.search.qmp-script2"
+            },
+            "3": {
+              "name": "constant.numeric.timeout.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.loop.while.qmp-script2",
+          "match": "\u003c(while-found|while-not-found)\\s+(\"[^\"]*\")\\s+(\\d+s?)(?:\\s+poll\\s+(\\d+(?:\\.\\d+)?s?))??\u003e",
+          "captures": {
+            "1": {
+              "name": "keyword.control.loop.while.qmp-script2"
+            },
+            "2": {
+              "name": "string.quoted.double.search.qmp-script2"
+            },
+            "3": {
+              "name": "constant.numeric.timeout.qmp-script2"
+            },
+            "4": {
+              "name": "constant.numeric.poll.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.loop.count.qmp-script2",
+          "match": "\u003c(retry|repeat)\\s+(\\d+)\u003e",
+          "captures": {
+            "1": {
+              "name": "keyword.control.loop.qmp-script2"
+            },
+            "2": {
+              "name": "constant.numeric.count.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.system.console.qmp-script2",
+          "match": "\u003c(console)\\s+(\\d+)\u003e",
+          "captures": {
+            "1": {
+              "name": "support.function.system.console.qmp-script2"
+            },
+            "2": {
+              "name": "constant.numeric.console.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.timing.wait.qmp-script2",
+          "match": "\u003c(wait)\\s+(\\d+s?)\u003e",
+          "captures": {
+            "1": {
+              "name": "support.function.timing.wait.qmp-script2"
+            },
+            "2": {
+              "name": "constant.numeric.duration.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.control.exit.qmp-script2",
+          "match": "\u003c(exit)\\s+(\\d+)\u003e",
+          "captures": {
+            "1": {
+              "name": "keyword.control.flow.exit.qmp-script2"
+            },
+            "2": {
+              "name": "constant.numeric.exitcode.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.composition.include.qmp-script2",
+          "match": "\u003c(include)\\s+(\"[^\"]+\")\u003e",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.qmp-script2"
+            },
+            "2": {
+              "name": "string.quoted.double.filename.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.debug.screenshot.qmp-script2",
+          "match": "\u003c(screenshot)\\s+(\"[^\"]+\")(?:\\s+(png|ppm|jpg))?\u003e",
+          "captures": {
+            "1": {
+              "name": "support.function.debug.screenshot.qmp-script2"
+            },
+            "2": {
+              "name": "string.quoted.double.filename.qmp-script2"
+            },
+            "3": {
+              "name": "support.constant.format.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "keyword.control.conditional.else.qmp-script2",
+          "match": "\u003c(else)\u003e"
+        },
+        {
+          "name": "string.escaped.directive.qmp-script2",
+          "match": "\\\\(\u003c[^\u003e]*\u003e)",
+          "captures": {
+            "1": {
+              "name": "markup.raw.directive.qmp-script2"
+            }
+          }
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.definition.qmp-script2",
+          "match": "\u003c(function)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\u003e",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.keyword.qmp-script2"
+            },
+            "2": {
+              "name": "entity.name.function.definition.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.function.call.qmp-script2",
+          "match": "\u003c(call)\\s+([a-zA-Z_][a-zA-Z0-9_]*)(.*?)\u003e",
+          "captures": {
+            "1": {
+              "name": "keyword.control.call.qmp-script2"
+            },
+            "2": {
+              "name": "entity.name.function.call.qmp-script2"
+            },
+            "3": {
+              "name": "meta.function.arguments.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "storage.type.function.end.keyword.qmp-script2",
+          "match": "\u003c(end-function)\u003e",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.end.qmp-script2"
+            }
+          }
+        }
+      ]
+    },
+    "keys": {
+      "patterns": [
+        {
+          "name": "support.function.key.special.qmp-script2",
+          "match": "^(enter|tab|space|escape|backspace|delete|up|down|left|right|home|end|page_up|page_down|ctrl\\+[a-z]|alt\\+[a-z]|shift\\+[a-z]|f[1-9][0-9]?)$"
+        }
+      ]
+    },
+    "loops": {
+      "patterns": [
+        {
+          "name": "keyword.control.loop.qmp-script2",
+          "match": "^repeat\\s+(\\d+)$"
+        },
+        {
+          "name": "keyword.control.loop.qmp-script2",
+          "match": "^retry\\s+(\\d+)$"
+        },
+        {
+          "name": "keyword.control.loop.while.qmp-script2",
+          "match": "^while-found\\s+\"([^\"]+)\"\\s+(\\d+s?)\\s*(?:poll\\s+(\\d+(?:\\.\\d+)?s?))?$"
+        },
+        {
+          "name": "keyword.control.loop.while.qmp-script2",
+          "match": "^while-not-found\\s+\"([^\"]+)\"\\s+(\\d+s?)\\s*(?:poll\\s+(\\d+(?:\\.\\d+)?s?))?$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.qmp-script2",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.qmp-script2",
+              "match": "\\\\."
+            },
+            {
+              "name": "support.constant.placeholder.qmp-script2",
+              "match": "\\{(timestamp|date|time|datetime|unix)\\}"
+            }
+          ]
+        }
+      ]
+    },
+    "structure": {
+      "patterns": [
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^\\s*$"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.expansion.complex.qmp-script2",
+          "match": "\\$\\{([^}:]+):([^}]+)\\}",
+          "captures": {
+            "1": {
+              "name": "variable.other.readwrite.qmp-script2"
+            },
+            "2": {
+              "name": "support.constant.expansion.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "variable.other.expansion.simple.qmp-script2",
+          "match": "\\$\\{([^}]+)\\}",
+          "captures": {
+            "1": {
+              "name": "variable.other.readwrite.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "variable.other.readwrite.basic.qmp-script2",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "variable.other.assignment.qmp-script2",
+          "match": "^([A-Za-z_][A-Za-z0-9_]*)=",
+          "captures": {
+            "1": {
+              "name": "variable.other.readwrite.name.qmp-script2"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

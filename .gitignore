@@ -1,4 +1,96 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go build -o test` where test is the binary name
+test
+qmp-controller
+qmp-test
+
+# Go test files
+*.test
+
+# Go coverage files
+*.out
+
+# Go work files
+go.work
+go.work.sum
+
+# Dependency directories (Go modules)
+vendor/
+
+# IDE and editor files
+.vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Log files
+*.log
+logs/
+
+# Configuration files (may contain sensitive data)
+*.env
+.env.*
+
+# Build artifacts
 dist/
 build/
+
+# Test data and artifacts
+test_*.txt
+*_test.txt
+test_data/
+training-data.json
+
+# Package files
+*.tgz
+*.tar.gz
+*.zip
+
+# VSCode extension build artifacts
+vscode-extension/*.vsix
+vscode-extension/node_modules/
+
+# Local development files
+dev.json
+map
+a.txt
+todo.MD
+unified_ocr_design.md
+vi_script_example.txt
+
+# VM files (these can be large)
+vm/*.qcow2
+vm/*.img
+vm/*.vmdk
+
+# NPM and package manager files
+package-lock.json
+yarn.lock
+
+# Examples and test scripts (keep structure but ignore content)
+examples/*.txt
+examples/*.script
+examples/*.script2
+examples/*.sc2

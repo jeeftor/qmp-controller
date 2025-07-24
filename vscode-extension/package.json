@@ -1,0 +1,57 @@
+{
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "grammars": [
+      {
+        "language": "qmp-script2",
+        "path": "./syntaxes/qmp-script2.tmLanguage.json",
+        "scopeName": "source.qmp-script2"
+      }
+    ],
+    "languages": [
+      {
+        "aliases": [
+          "QMP Script2",
+          "script2"
+        ],
+        "configuration": "./language-configuration.json",
+        "extensions": [
+          ".sc2",
+          ".script2",
+          ".qmp2"
+        ],
+        "id": "qmp-script2"
+      }
+    ]
+  },
+  "description": "Syntax highlighting for QMP Script2 automation files",
+  "devDependencies": {
+    "vsce": "^2.15.0"
+  },
+  "displayName": "QMP Script2 Syntax Highlighting",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "keywords": [
+    "qmp",
+    "script2",
+    "automation",
+    "virtualization",
+    "syntax"
+  ],
+  "license": "MIT",
+  "name": "qmp-script2",
+  "publisher": "qmp-controller",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeeftor/qmp-controller.git"
+  },
+  "scripts": {
+    "compile": "echo 'No compilation needed for grammar-only extension'",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "version": "0.0.2-dev"
+}

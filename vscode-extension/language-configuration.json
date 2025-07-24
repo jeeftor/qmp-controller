@@ -1,0 +1,56 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    ["<", ">"],
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "<",
+      "close": ">",
+      "notIn": ["string", "comment"]
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": ["string"]
+    },
+    {
+      "open": "{",
+      "close": "}",
+      "notIn": ["string", "comment"]
+    },
+    {
+      "open": "[",
+      "close": "]",
+      "notIn": ["string", "comment"]
+    },
+    {
+      "open": "(",
+      "close": ")",
+      "notIn": ["string", "comment"]
+    }
+  ],
+  "surroundingPairs": [
+    ["<", ">"],
+    ["\"", "\""],
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "wordPattern": "([a-zA-Z_$][a-zA-Z0-9_$]*)|(<[^>]*>)",
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found)\\b.*$",
+    "decreaseIndentPattern": "^\\s*<(end-function|else)>\\s*$"
+  },
+  "folding": {
+    "markers": {
+      "start": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found)\\b",
+      "end": "^\\s*<(end-function|else)>"
+    }
+  }
+}
