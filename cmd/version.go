@@ -3,10 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
@@ -16,9 +15,12 @@ import (
 
 // These variables will be set during the build using ldflags
 var (
-	buildVersion = "dev"
-	buildCommit  = "none"
-	buildTime    = "unknown"
+	buildVersion         = "dev"
+	buildTag             = "unknown"
+	buildCommitsSinceTag = "unknown"
+	buildBranch          = "unknown"
+	buildCommit          = "none"
+	buildTime            = "unknown"
 )
 
 var shortOutput bool
@@ -52,26 +54,22 @@ func parseInt64(s string) (int64, error) {
 }
 
 // GetDisplayVersion returns a formatted version string
-// If we're in dev mode, it shows "dev (last release X.Y.Z)"
+// If on a tagged commit (buildCommitsSinceTag == "0"), returns the tag (e.g., "v0.0.1")
+// Otherwise, returns "dev (N commits since <tag>)" (e.g., "dev (6 commits since v0.1.2)")
 func GetDisplayVersion() string {
-	// If we're in a release build, just return the build version
-	if buildVersion != "dev" {
-		return buildVersion
+	// Parse buildCommitsSinceTag as an integer
+	commits, err := strconv.Atoi(buildCommitsSinceTag)
+	if err != nil || buildCommitsSinceTag == "unknown" {
+		return "dev" // Fallback if parsing fails or no valid tag
 	}
 
-	// We're in dev mode, try to find the last release tag
-	cmd := exec.Command("git", "describe", "--tags", "--abbrev=0")
-	tagBytes, err := cmd.Output()
-
-	if err == nil {
-		tag := strings.TrimSpace(string(tagBytes))
-		if tag != "" {
-			return fmt.Sprintf("dev (last release %s)", tag)
-		}
+	// If no commits since tag, return the tag as-is
+	if commits == 0 {
+		return buildTag
 	}
 
-	// Couldn't find a tag, just return dev
-	return "dev"
+	// Otherwise, return dev with commit count and tag
+	return fmt.Sprintf("dev (%d commits since %s)", commits, buildTag)
 }
 
 var versionCmd = &cobra.Command{
@@ -125,7 +123,7 @@ var versionCmd = &cobra.Command{
 		// Display formatted output
 		fmt.Printf("%s %s\n", labelStyle.Render("Version:"), versionStyle.Render(displayVersion))
 		fmt.Printf("%s %s\n", labelStyle.Render("Built:  "), buildStyle.Render(GetFormattedBuildTime()))
-		fmt.Printf("%s %s\n", labelStyle.Render("Commit: "), commitStyle.Render(buildCommit))
+		fmt.Printf("%s %s\n", labelStyle.Render("Commit: "), commitStyle.Render(fmt.Sprintf("%s (%s)", buildCommit, buildBranch)))
 		fmt.Printf("%s %s\n", labelStyle.Render("OS/Arch:"), osArchStyle.Render(fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)))
 		fmt.Printf("%s %s\n", labelStyle.Render("Go:     "), goVersionStyle.Render(runtime.Version()))
 		fmt.Printf("%s %s\n", labelStyle.Render("Binary: "), pathStyle.Render(exePath))

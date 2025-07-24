@@ -1,20 +1,34 @@
 
 # Build variables
+# Build variables
 GIT_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+GIT_COMMITS_SINCE_TAG ?= $(shell c=$$(git rev-list $(GIT_TAG)..HEAD --count 2>/dev/null); [ "$$c" -eq 0 ] && echo "0" || echo "$$c" 2>/dev/null || echo "0")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+GIT_BRANCH ?= $(shell git branch --show-current 2>/dev/null || echo "unknown")
 BUILD_TIME ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 
+print-vars:
+	@echo "GIT_TAG = $(GIT_TAG)"
+	@echo "GIT_COMMITS_SINCE_TAG = $(GIT_COMMITS_SINCE_TAG)"
+	@echo "GIT_COMMIT = $(GIT_COMMIT)"
+	@echo "GIT_BRANCH = $(GIT_BRANCH)"
+	@echo "BUILD_TIME = $(BUILD_TIME)"
+
 # LDFLAGS for embedding version information
 LDFLAGS := -ldflags "-s -w \
-	-X github.com/jeeftor/qmp-controller/cmd.buildVersion=$(GIT_TAG) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildTag=$(GIT_TAG) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildCommitsSinceTag=$(GIT_COMMITS_SINCE_TAG) \
 	-X github.com/jeeftor/qmp-controller/cmd.buildCommit=$(GIT_COMMIT) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildBranch=$(GIT_BRANCH)\
 	-X github.com/jeeftor/qmp-controller/cmd.buildTime=$(BUILD_TIME)"
 
 # LDFLAGS with static linking for Linux builds
 LDFLAGS_STATIC := -ldflags "-s -w \
-	-X github.com/jeeftor/qmp-controller/cmd.buildVersion=$(GIT_TAG) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildTag=$(GIT_TAG) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildCommitsSinceTag=$(GIT_COMMITS_SINCE_TAG) \
 	-X github.com/jeeftor/qmp-controller/cmd.buildCommit=$(GIT_COMMIT) \
+	-X github.com/jeeftor/qmp-controller/cmd.buildBranch=$(GIT_BRANCH)\
 	-X github.com/jeeftor/qmp-controller/cmd.buildTime=$(BUILD_TIME) \
 	-extldflags '-static'"
 
