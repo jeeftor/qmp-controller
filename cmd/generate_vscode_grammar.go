@@ -465,99 +465,145 @@ func addCustomPatterns(grammar *TextMateGrammar) {
 	// Add enhanced directives pattern with specific colors
 	grammar.Repository["directives"] = TextMateRepositoryItem{
 		Patterns: []TextMatePattern{
-			// Key sequences - bright blue
+			// Key sequences - distinct colors for each part
 			{
-				Match: "<(enter|tab|space|escape|backspace|delete|up|down|left|right|home|end|page_up|page_down)>",
-				Name:  "support.function.key.navigation.qmp-script2",
-			},
-			{
-				Match: "<(ctrl|alt|shift)\\+([a-z])>",
-				Name:  "support.function.key.modifier.qmp-script2",
+				Match: "(<)(enter|tab|space|escape|backspace|delete|up|down|left|right|home|end|page_up|page_down)(>)",
+				Name:  "meta.key.navigation.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "support.function.key.modifier.name.qmp-script2"},
-					"2": {Name: "support.function.key.modifier.key.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"}, // < bracket
+					"2": {Name: "support.function.key.navigation.qmp-script2"},        // key name - bright blue
+					"3": {Name: "punctuation.definition.directive.end.qmp-script2"},  // > bracket
 				},
 			},
 			{
-				Match: "<(f[1-9][0-9]?)>",
-				Name:  "support.function.key.function.qmp-script2",
+				Match: "(<)(ctrl|alt|shift)(\\+)([a-z])(>)",
+				Name:  "meta.key.modifier.qmp-script2",
+				Captures: map[string]TextMateCapture{
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"}, // < bracket
+					"2": {Name: "support.function.key.modifier.name.qmp-script2"},     // ctrl/alt/shift - blue
+					"3": {Name: "punctuation.separator.modifier.qmp-script2"},        // + sign - white
+					"4": {Name: "support.function.key.modifier.key.qmp-script2"},     // key letter - bright blue
+					"5": {Name: "punctuation.definition.directive.end.qmp-script2"},  // > bracket
+				},
 			},
-			// Conditional directives - green/yellow
 			{
-				Match: "<(watch|if-found|if-not-found)\\s+(\"[^\"]*\")\\s+(\\d+s?)>",
+				Match: "(<)(f[1-9][0-9]?)(>)",
+				Name:  "meta.key.function.qmp-script2",
+				Captures: map[string]TextMateCapture{
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"}, // < bracket
+					"2": {Name: "support.function.key.function.qmp-script2"},          // function key - bright blue
+					"3": {Name: "punctuation.definition.directive.end.qmp-script2"},  // > bracket
+				},
+			},
+			// Conditional directives - distinct colors for each part
+			{
+				Match: "(<)(watch|if-found|if-not-found)(\\s+)(\"[^\"]*\")(\\s+)(\\d+s?)(>)",
 				Name:  "meta.conditional.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "keyword.control.conditional.qmp-script2"},
-					"2": {Name: "string.quoted.double.search.qmp-script2"},
-					"3": {Name: "constant.numeric.timeout.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},      // < bracket - gray
+					"2": {Name: "keyword.control.conditional.qmp-script2"},                // watch keyword - blue
+					"3": {Name: "punctuation.separator.space.qmp-script2"},               // space - invisible
+					"4": {Name: "string.quoted.double.search.qmp-script2"},               // "password" - green
+					"5": {Name: "punctuation.separator.space.qmp-script2"},               // space - invisible
+					"6": {Name: "constant.numeric.timeout.qmp-script2"},                  // 5s - orange
+					"7": {Name: "punctuation.definition.directive.end.qmp-script2"},      // > bracket - gray
 				},
 			},
-			// Loop directives - purple
+			// Loop directives - distinct colors for each part
 			{
-				Match: "<(while-found|while-not-found)\\s+(\"[^\"]*\")\\s+(\\d+s?)(?:\\s+poll\\s+(\\d+(?:\\.\\d+)?s?))??>",
+				Match: "(<)(while-found|while-not-found)(\\s+)(\"[^\"]*\")(\\s+)(\\d+s?)(?:(\\s+poll\\s+)(\\d+(?:\\.\\d+)?s?))?(>)",
 				Name:  "meta.loop.while.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "keyword.control.loop.while.qmp-script2"},
-					"2": {Name: "string.quoted.double.search.qmp-script2"},
-					"3": {Name: "constant.numeric.timeout.qmp-script2"},
-					"4": {Name: "constant.numeric.poll.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},      // < bracket
+					"2": {Name: "keyword.control.loop.while.qmp-script2"},                // while-found keyword - purple
+					"3": {Name: "punctuation.separator.space.qmp-script2"},               // space
+					"4": {Name: "string.quoted.double.search.qmp-script2"},               // "text" - green
+					"5": {Name: "punctuation.separator.space.qmp-script2"},               // space
+					"6": {Name: "constant.numeric.timeout.qmp-script2"},                  // 30s - orange
+					"7": {Name: "keyword.other.poll.qmp-script2"},                        // poll 1s - cyan
+					"8": {Name: "constant.numeric.poll.qmp-script2"},                     // poll interval - orange
+					"9": {Name: "punctuation.definition.directive.end.qmp-script2"},      // > bracket
 				},
 			},
 			{
-				Match: "<(retry|repeat)\\s+(\\d+)>",
+				Match: "(<)(retry|repeat)(\\s+)(\\d+)(>)",
 				Name:  "meta.loop.count.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "keyword.control.loop.qmp-script2"},
-					"2": {Name: "constant.numeric.count.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},    // < bracket
+					"2": {Name: "keyword.control.loop.qmp-script2"},                      // retry/repeat - purple
+					"3": {Name: "punctuation.separator.space.qmp-script2"},              // space
+					"4": {Name: "constant.numeric.count.qmp-script2"},                   // count number - orange
+					"5": {Name: "punctuation.definition.directive.end.qmp-script2"},     // > bracket
 				},
 			},
-			// System directives - orange
+			// System directives - distinct colors for each part
 			{
-				Match: "<(console)\\s+(\\d+)>",
+				Match: "(<)(console)(\\s+)(\\d+)(>)",
 				Name:  "meta.system.console.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "support.function.system.console.qmp-script2"},
-					"2": {Name: "constant.numeric.console.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},    // < bracket
+					"2": {Name: "support.function.system.console.qmp-script2"},          // console keyword - cyan
+					"3": {Name: "punctuation.separator.space.qmp-script2"},             // space
+					"4": {Name: "constant.numeric.console.qmp-script2"},                // console number - orange
+					"5": {Name: "punctuation.definition.directive.end.qmp-script2"},    // > bracket
 				},
 			},
 			{
-				Match: "<(wait)\\s+(\\d+s?)>",
+				Match: "(<)(wait)(\\s+)(\\d+s?)(>)",
 				Name:  "meta.timing.wait.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "support.function.timing.wait.qmp-script2"},
-					"2": {Name: "constant.numeric.duration.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},   // < bracket
+					"2": {Name: "support.function.timing.wait.qmp-script2"},            // wait keyword - cyan
+					"3": {Name: "punctuation.separator.space.qmp-script2"},            // space
+					"4": {Name: "constant.numeric.duration.qmp-script2"},              // duration - orange
+					"5": {Name: "punctuation.definition.directive.end.qmp-script2"},   // > bracket
 				},
 			},
 			{
-				Match: "<(exit)\\s+(\\d+)>",
+				Match: "(<)(exit)(\\s+)(\\d+)(>)",
 				Name:  "meta.control.exit.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "keyword.control.flow.exit.qmp-script2"},
-					"2": {Name: "constant.numeric.exitcode.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},  // < bracket
+					"2": {Name: "keyword.control.flow.exit.qmp-script2"},              // exit keyword - red
+					"3": {Name: "punctuation.separator.space.qmp-script2"},           // space
+					"4": {Name: "constant.numeric.exitcode.qmp-script2"},             // exit code - orange
+					"5": {Name: "punctuation.definition.directive.end.qmp-script2"},  // > bracket
 				},
 			},
-			// Composition directives - cyan
+			// Composition directives - distinct colors for each part
 			{
-				Match: "<(include)\\s+(\"[^\"]+\")>",
+				Match: "(<)(include)(\\s+)(\"[^\"]+\")(>)",
 				Name:  "meta.composition.include.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "keyword.control.import.qmp-script2"},
-					"2": {Name: "string.quoted.double.filename.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"},   // < bracket
+					"2": {Name: "keyword.control.import.qmp-script2"},                  // include keyword - magenta
+					"3": {Name: "punctuation.separator.space.qmp-script2"},            // space
+					"4": {Name: "string.quoted.double.filename.qmp-script2"},          // "filename" - green
+					"5": {Name: "punctuation.definition.directive.end.qmp-script2"},   // > bracket
 				},
 			},
 			{
-				Match: "<(screenshot)\\s+(\"[^\"]+\")(?:\\s+(png|ppm|jpg))?>",
+				Match: "(<)(screenshot)(\\s+)(\"[^\"]+\")(?:(\\s+)(png|ppm|jpg))?(>)",
 				Name:  "meta.debug.screenshot.qmp-script2",
 				Captures: map[string]TextMateCapture{
-					"1": {Name: "support.function.debug.screenshot.qmp-script2"},
-					"2": {Name: "string.quoted.double.filename.qmp-script2"},
-					"3": {Name: "support.constant.format.qmp-script2"},
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"}, // < bracket
+					"2": {Name: "support.function.debug.screenshot.qmp-script2"},      // screenshot keyword - yellow
+					"3": {Name: "punctuation.separator.space.qmp-script2"},           // space
+					"4": {Name: "string.quoted.double.filename.qmp-script2"},         // "filename" - green
+					"5": {Name: "punctuation.separator.space.qmp-script2"},           // space
+					"6": {Name: "support.constant.format.qmp-script2"},               // format - cyan
+					"7": {Name: "punctuation.definition.directive.end.qmp-script2"},  // > bracket
 				},
 			},
-			// Control flow - red
+			// Control flow - distinct colors for each part
 			{
-				Match: "<(else)>",
-				Name:  "keyword.control.conditional.else.qmp-script2",
+				Match: "(<)(else)(>)",
+				Name:  "meta.control.else.qmp-script2",
+				Captures: map[string]TextMateCapture{
+					"1": {Name: "punctuation.definition.directive.begin.qmp-script2"}, // < bracket
+					"2": {Name: "keyword.control.conditional.else.qmp-script2"},       // else keyword - red
+					"3": {Name: "punctuation.definition.directive.end.qmp-script2"},  // > bracket
+				},
 			},
 			// Escaped directives - gray
 			{

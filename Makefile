@@ -63,10 +63,18 @@ vscode-extension:
 	cd vscode-extension && npm install --silent && npm run package
 	@echo "✅ VSCode extension built: vscode-extension/qmp-script2-*.vsix"
 
-vscode-install: vscode-extension
+vscode-uninstall:
+	@echo "🗑️  Uninstalling old VSCode extension..."
+	code --uninstall-extension qmp-controller.qmp-script2 || true
+	@echo "✅ Old extension uninstalled!"
+
+vscode-install: vscode-extension vscode-uninstall
 	@echo "🔧 Installing VSCode extension..."
 	cd vscode-extension && code --install-extension qmp-script2-*.vsix
 	@echo "✅ VSCode extension installed!"
+
+vscode-reinstall: vscode-uninstall vscode-install
+	@echo "✅ VSCode extension reinstalled!"
 
 vscode-clean:
 	rm -rf vscode-extension/*.vsix vscode-extension/node_modules
@@ -191,4 +199,4 @@ clean-socket: socket-cleanup
 debug-socket: socket-debug
 clean-simple: socket-simple-cleanup
 
-.PHONY: clean build-amd build-arm build-mac-arm build build-with-vscode scp socket-setup socket-simple socket-simple-cleanup socket-test socket-test-manual socket-cleanup socket-status socket test-socket clean-socket socket-debug socket-manual debug-socket socket-simple-start clean-simple test-manual vscode-extension vscode-install vscode-clean
+.PHONY: clean build-amd build-arm build-mac-arm build build-with-vscode scp socket-setup socket-simple socket-simple-cleanup socket-test socket-test-manual socket-cleanup socket-status socket test-socket clean-socket socket-debug socket-manual debug-socket socket-simple-start clean-simple test-manual vscode-extension vscode-uninstall vscode-install vscode-reinstall vscode-clean

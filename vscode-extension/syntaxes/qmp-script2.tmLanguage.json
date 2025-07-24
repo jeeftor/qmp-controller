@@ -80,136 +80,262 @@
     "directives": {
       "patterns": [
         {
-          "name": "support.function.key.navigation.qmp-script2",
-          "match": "\u003c(enter|tab|space|escape|backspace|delete|up|down|left|right|home|end|page_up|page_down)\u003e"
-        },
-        {
-          "name": "support.function.key.modifier.qmp-script2",
-          "match": "\u003c(ctrl|alt|shift)\\+([a-z])\u003e",
+          "name": "meta.key.navigation.qmp-script2",
+          "match": "(\u003c)(enter|tab|space|escape|backspace|delete|up|down|left|right|home|end|page_up|page_down)(\u003e)",
           "captures": {
             "1": {
-              "name": "support.function.key.modifier.name.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
-              "name": "support.function.key.modifier.key.qmp-script2"
+              "name": "support.function.key.navigation.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
-          "name": "support.function.key.function.qmp-script2",
-          "match": "\u003c(f[1-9][0-9]?)\u003e"
+          "name": "meta.key.modifier.qmp-script2",
+          "match": "(\u003c)(ctrl|alt|shift)(\\+)([a-z])(\u003e)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.directive.begin.qmp-script2"
+            },
+            "2": {
+              "name": "support.function.key.modifier.name.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.separator.modifier.qmp-script2"
+            },
+            "4": {
+              "name": "support.function.key.modifier.key.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
+            }
+          }
+        },
+        {
+          "name": "meta.key.function.qmp-script2",
+          "match": "(\u003c)(f[1-9][0-9]?)(\u003e)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.directive.begin.qmp-script2"
+            },
+            "2": {
+              "name": "support.function.key.function.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
+            }
+          }
         },
         {
           "name": "meta.conditional.qmp-script2",
-          "match": "\u003c(watch|if-found|if-not-found)\\s+(\"[^\"]*\")\\s+(\\d+s?)\u003e",
+          "match": "(\u003c)(watch|if-found|if-not-found)(\\s+)(\"[^\"]*\")(\\s+)(\\d+s?)(\u003e)",
           "captures": {
             "1": {
-              "name": "keyword.control.conditional.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
-              "name": "string.quoted.double.search.qmp-script2"
+              "name": "keyword.control.conditional.qmp-script2"
             },
             "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
+              "name": "string.quoted.double.search.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "6": {
               "name": "constant.numeric.timeout.qmp-script2"
+            },
+            "7": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.loop.while.qmp-script2",
-          "match": "\u003c(while-found|while-not-found)\\s+(\"[^\"]*\")\\s+(\\d+s?)(?:\\s+poll\\s+(\\d+(?:\\.\\d+)?s?))??\u003e",
+          "match": "(\u003c)(while-found|while-not-found)(\\s+)(\"[^\"]*\")(\\s+)(\\d+s?)(?:(\\s+poll\\s+)(\\d+(?:\\.\\d+)?s?))?(\u003e)",
           "captures": {
             "1": {
-              "name": "keyword.control.loop.while.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
-              "name": "string.quoted.double.search.qmp-script2"
+              "name": "keyword.control.loop.while.qmp-script2"
             },
             "3": {
-              "name": "constant.numeric.timeout.qmp-script2"
+              "name": "punctuation.separator.space.qmp-script2"
             },
             "4": {
+              "name": "string.quoted.double.search.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "6": {
+              "name": "constant.numeric.timeout.qmp-script2"
+            },
+            "7": {
+              "name": "keyword.other.poll.qmp-script2"
+            },
+            "8": {
               "name": "constant.numeric.poll.qmp-script2"
+            },
+            "9": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.loop.count.qmp-script2",
-          "match": "\u003c(retry|repeat)\\s+(\\d+)\u003e",
+          "match": "(\u003c)(retry|repeat)(\\s+)(\\d+)(\u003e)",
           "captures": {
             "1": {
-              "name": "keyword.control.loop.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
+              "name": "keyword.control.loop.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
               "name": "constant.numeric.count.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.system.console.qmp-script2",
-          "match": "\u003c(console)\\s+(\\d+)\u003e",
+          "match": "(\u003c)(console)(\\s+)(\\d+)(\u003e)",
           "captures": {
             "1": {
-              "name": "support.function.system.console.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
+              "name": "support.function.system.console.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
               "name": "constant.numeric.console.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.timing.wait.qmp-script2",
-          "match": "\u003c(wait)\\s+(\\d+s?)\u003e",
+          "match": "(\u003c)(wait)(\\s+)(\\d+s?)(\u003e)",
           "captures": {
             "1": {
-              "name": "support.function.timing.wait.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
+              "name": "support.function.timing.wait.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
               "name": "constant.numeric.duration.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.control.exit.qmp-script2",
-          "match": "\u003c(exit)\\s+(\\d+)\u003e",
+          "match": "(\u003c)(exit)(\\s+)(\\d+)(\u003e)",
           "captures": {
             "1": {
-              "name": "keyword.control.flow.exit.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
+              "name": "keyword.control.flow.exit.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
               "name": "constant.numeric.exitcode.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.composition.include.qmp-script2",
-          "match": "\u003c(include)\\s+(\"[^\"]+\")\u003e",
+          "match": "(\u003c)(include)(\\s+)(\"[^\"]+\")(\u003e)",
           "captures": {
             "1": {
-              "name": "keyword.control.import.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
+              "name": "keyword.control.import.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
               "name": "string.quoted.double.filename.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
           "name": "meta.debug.screenshot.qmp-script2",
-          "match": "\u003c(screenshot)\\s+(\"[^\"]+\")(?:\\s+(png|ppm|jpg))?\u003e",
+          "match": "(\u003c)(screenshot)(\\s+)(\"[^\"]+\")(?:(\\s+)(png|ppm|jpg))?(\u003e)",
           "captures": {
             "1": {
-              "name": "support.function.debug.screenshot.qmp-script2"
+              "name": "punctuation.definition.directive.begin.qmp-script2"
             },
             "2": {
-              "name": "string.quoted.double.filename.qmp-script2"
+              "name": "support.function.debug.screenshot.qmp-script2"
             },
             "3": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "4": {
+              "name": "string.quoted.double.filename.qmp-script2"
+            },
+            "5": {
+              "name": "punctuation.separator.space.qmp-script2"
+            },
+            "6": {
               "name": "support.constant.format.qmp-script2"
+            },
+            "7": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
             }
           }
         },
         {
-          "name": "keyword.control.conditional.else.qmp-script2",
-          "match": "\u003c(else)\u003e"
+          "name": "meta.control.else.qmp-script2",
+          "match": "(\u003c)(else)(\u003e)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.directive.begin.qmp-script2"
+            },
+            "2": {
+              "name": "keyword.control.conditional.else.qmp-script2"
+            },
+            "3": {
+              "name": "punctuation.definition.directive.end.qmp-script2"
+            }
+          }
         },
         {
           "name": "string.escaped.directive.qmp-script2",
