@@ -43,33 +43,85 @@ Exit codes: 0 = found, 1 = not found, 2 = OCR error, 3 = invalid regex`
 )
 
 // syncConfigFromFlags populates the OCR config from command flags
+// Enhanced to respect priority: CLI flags > environment variables > defaults
 func syncConfigFromFlags() {
-	ocrConfig.Columns = columns
-	ocrConfig.Rows = rows
-	ocrConfig.AnsiMode = ansiMode
-	ocrConfig.ColorMode = colorMode
+	// Only override with CLI flag values if they differ from defaults
+	// This preserves the environment variable values loaded in NewOCRConfig()
 
-	// Auto-enable cropping if crop parameters are provided
-	ocrConfig.CropEnabled = cropRowsStr != "" || cropColsStr != ""
-	ocrConfig.CropRowsStr = cropRowsStr
-	ocrConfig.CropColsStr = cropColsStr
-	ocrConfig.CropStartRow = cropStartRow
-	ocrConfig.CropEndRow = cropEndRow
-	ocrConfig.CropStartCol = cropStartCol
-	ocrConfig.CropEndCol = cropEndCol
-	ocrConfig.SingleChar = singleChar
-	ocrConfig.CharRow = charRow
-	ocrConfig.CharCol = charCol
-
-	// Only override the training data path if it's not already set or if the flag value is non-empty
-	if ocrConfig.TrainingDataPath == "" || (trainingDataPath != "" && trainingDataPath != ocrConfig.TrainingDataPath) {
-		ocrConfig.TrainingDataPath = trainingDataPath
+	// Screen dimensions - only override if explicitly set via flags
+	if columns != qmp.DEFAULT_WIDTH {
+		ocrConfig.Columns = columns
+	}
+	if rows != qmp.DEFAULT_HEIGHT {
+		ocrConfig.Rows = rows
 	}
 
-	ocrConfig.FilterBlankLines = filterBlankLines
-	ocrConfig.ShowLineNumbers = showLineNumbers
-	ocrConfig.UpdateTraining = updateTraining
-	ocrConfig.RenderSpecialChars = renderSpecialChars
+	// Boolean flags - these will be false by default, so we need to check if flag was set
+	// For now, we'll assume any true value means the flag was explicitly set
+	if ansiMode {
+		ocrConfig.AnsiMode = ansiMode
+	}
+	if colorMode {
+		ocrConfig.ColorMode = colorMode
+	}
+	if filterBlankLines {
+		ocrConfig.FilterBlankLines = filterBlankLines
+	}
+	if showLineNumbers {
+		ocrConfig.ShowLineNumbers = showLineNumbers
+	}
+	if updateTraining {
+		ocrConfig.UpdateTraining = updateTraining
+	}
+	if renderSpecialChars {
+		ocrConfig.RenderSpecialChars = renderSpecialChars
+	}
+	if singleChar {
+		ocrConfig.SingleChar = singleChar
+	}
+
+	// Numeric flags - only override if non-zero (assuming 0 is default)
+	if charRow != 0 {
+		ocrConfig.CharRow = charRow
+	}
+	if charCol != 0 {
+		ocrConfig.CharCol = charCol
+	}
+	if cropStartRow != 0 {
+		ocrConfig.CropStartRow = cropStartRow
+	}
+	if cropEndRow != 0 {
+		ocrConfig.CropEndRow = cropEndRow
+	}
+	if cropStartCol != 0 {
+		ocrConfig.CropStartCol = cropStartCol
+	}
+	if cropEndCol != 0 {
+		ocrConfig.CropEndCol = cropEndCol
+	}
+
+	// String flags - only override if non-empty
+	if cropRowsStr != "" {
+		ocrConfig.CropRowsStr = cropRowsStr
+		ocrConfig.CropEnabled = true
+	}
+	if cropColsStr != "" {
+		ocrConfig.CropColsStr = cropColsStr
+		ocrConfig.CropEnabled = true
+	}
+
+	// Training data path - enhanced logic to respect priority
+	if trainingDataPath != "" {
+		ocrConfig.TrainingDataPath = trainingDataPath
+	} else if ocrConfig.TrainingDataPath == "" {
+		// If no CLI flag and no env var, use default
+		ocrConfig.TrainingDataPath = qmp.GetDefaultTrainingDataPath()
+	}
+
+	// Auto-enable cropping if crop parameters are provided
+	if ocrConfig.CropRowsStr != "" || ocrConfig.CropColsStr != "" {
+		ocrConfig.CropEnabled = true
+	}
 }
 
 var (
@@ -120,9 +172,21 @@ This command captures a screenshot from the specified %s, divides it into charac
 the specified columns and rows, and attempts to recognize text characters. The %s is used to improve character recognition,
 and the results can be saved to an optional %s.
 
+✨ FLEXIBLE ARGUMENT ORDER: Arguments can be provided in any order - the system will auto-detect file types!
+
 Examples:
-  # Perform OCR with default settings
+  # Standard order
   qmp ocr vm 106 training.json text.txt --columns 160 --rows 50
+
+  # Flexible order - same result!
+  qmp ocr vm training.json 106 text.txt --columns 160 --rows 50
+  qmp ocr vm text.txt training.json 106 --columns 160 --rows 50
+
+  # Use environment variables
+  export QMP_TRAINING_DATA=training.json
+  export QMP_COLUMNS=160
+  export QMP_ROWS=50
+  qmp ocr vm 106 text.txt  # training data and dimensions from env vars
 
   # Use debug mode to see character representations
   qmp ocr vm 106 training.json text.txt --columns 160 --rows 50 --log-level debug
@@ -138,14 +202,31 @@ Examples:
 
   # Interactive training for unrecognized characters
   qmp ocr vm 106 training.json text.txt --columns 160 --rows 50 --update-training`, ArgVMID, ArgTrainingData, ArgOutputTextFile),
-	Args: cobra.RangeArgs(2, 3),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		ocrConfig.TrainingDataPath = args[1]
-		var outputTextFile string
-		if len(args) > 2 {
-			outputTextFile = args[2]
+		// Use flexible argument parsing
+		parser := ocr.ParseArguments(args, true) // expectVMID = true
+
+		// Validate parsed arguments
+		if validationErrors := parser.Validate(true, false, false); len(validationErrors) > 0 {
+			fmt.Fprintf(os.Stderr, "Argument parsing errors:\n")
+			for _, err := range validationErrors {
+				fmt.Fprintf(os.Stderr, "  • %s\n", err)
+			}
+			fmt.Fprintf(os.Stderr, "\n💡 Auto-detected argument types:\n")
+			for i, arg := range args {
+				fileType := ocr.DetectFileType(arg)
+				fmt.Fprintf(os.Stderr, "  [%d] %s -> %s\n", i+1, arg, fileType.String())
+			}
+			os.Exit(1)
 		}
+
+		// Extract parsed values
+		vmid := parser.VMID
+		if parser.TrainingData != "" {
+			ocrConfig.TrainingDataPath = parser.TrainingData
+		}
+		outputTextFile := parser.OutputFile
 
 		// Log the initial training data path
 		logging.Info("Initial training data path", "path", ocrConfig.TrainingDataPath)
@@ -363,15 +444,40 @@ Examples:
 
   # Interactive training for unrecognized characters
   qmp ocr file training.json screenshot.ppm text.txt --columns 160 --rows 50 --update-training`, ArgInputImageFile, ArgTrainingData, ArgOutputTextFile),
-	Args: cobra.RangeArgs(2, 3),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		// Get input file and training data
-		trainingDataPath := args[0]
-		inputImageFile := args[1]
+		// Use flexible argument parsing
+		parser := ocr.ParseArguments(args, false) // expectVMID = false
+
+		// Validate parsed arguments
+		validationErrors := parser.Validate(false, false, false)
+
+		// For file command, we need at least an image file
+		if parser.ImageFile == "" {
+			validationErrors = append(validationErrors, "Image file is required")
+		}
+
+		if len(validationErrors) > 0 {
+			fmt.Fprintf(os.Stderr, "Argument parsing errors:\n")
+			for _, err := range validationErrors {
+				fmt.Fprintf(os.Stderr, "  • %s\n", err)
+			}
+			fmt.Fprintf(os.Stderr, "\n💡 Auto-detected argument types:\n")
+			for i, arg := range args {
+				fileType := ocr.DetectFileType(arg)
+				fmt.Fprintf(os.Stderr, "  [%d] %s -> %s\n", i+1, arg, fileType.String())
+			}
+			os.Exit(1)
+		}
+
+		// Extract parsed values
+		inputImageFile := parser.ImageFile
+		if parser.TrainingData != "" {
+			ocrConfig.TrainingDataPath = parser.TrainingData
+		}
 
 		// Sync flags to config structure for validation
 		syncConfigFromFlags()
-		ocrConfig.TrainingDataPath = trainingDataPath
 
 		// Comprehensive configuration validation
 		validator := validation.NewConfigValidator()
@@ -396,10 +502,9 @@ Examples:
 				logging.Warn("Configuration validation warning", "warning", warning)
 			}
 		}
-		var outputTextFile string
-		if len(args) > 2 {
-			outputTextFile = args[2]
-
+		// Handle output file from flexible parsing
+		outputTextFile := parser.OutputFile
+		if outputTextFile != "" {
 			// Create output directory if it doesn't exist
 			outputDir := filepath.Dir(outputTextFile)
 			if outputDir != "." {
@@ -894,13 +999,41 @@ var ocrFindCmd = &cobra.Command{
 var ocrFindVMCmd = &cobra.Command{
 	Use:   fmt.Sprintf("vm [%s] [%s] [%s]", ArgVMID, ArgTrainingData, ArgString),
 	Short: "Search for a string in VM console OCR results",
-	Long: fmt.Sprintf("%s from a VM console.\n\nExamples:\n  # Search for \"Login successful\" in VM console\n  qmp ocr find vm 123 training.json \"Login successful\"\n\n  # Search for \"error\" (case-insensitive, first match only)\n  qmp ocr find vm 123 training.json \"error\" --ignore-case --first\n\n  # Search with debug output and line numbers\n  qmp ocr find vm 123 training.json \"root@\" --log-level debug --line-numbers",
+	Long: fmt.Sprintf("%s from a VM console.\n\nThe VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.\nThe training data can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.\n\nExamples:\n  # Explicit arguments\n  qmp ocr find vm 123 training.json \"Login successful\"\n\n  # Using environment variables\n  export QMP_VM_ID=123\n  export QMP_TRAINING_DATA=training.json\n  qmp ocr find vm \"Login successful\"\n\n  # Search for \"error\" (case-insensitive, first match only)\n  qmp ocr find vm 123 training.json \"error\" --ignore-case --first\n\n  # Search with debug output and line numbers\n  qmp ocr find vm 123 training.json \"root@\" --log-level debug --line-numbers",
 		fmt.Sprintf(SearchDescription, ArgString)),
-	Args: cobra.ExactArgs(3),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		trainingDataPath := args[1]
-		searchString := args[2]
+		// Use flexible argument parsing similar to other commands
+		parser := ocr.ParseArguments(args, true) // expectVMID = true
+
+		// For search commands, we need to extract the search string
+		// The search string is the non-VM, non-training-data argument
+		var vmid, trainingDataPath, searchString string
+
+		if parser.VMID != "" {
+			vmid = parser.VMID
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: VM ID is required: provide as argument or set QMP_VM_ID environment variable\n")
+			os.Exit(1)
+		}
+
+		if parser.TrainingData != "" {
+			trainingDataPath = parser.TrainingData
+		}
+
+		// Find the search string - it's the argument that's not VM ID or training data
+		for _, arg := range args {
+			fileType := ocr.DetectFileType(arg)
+			if fileType != ocr.FileTypeVMID && fileType != ocr.FileTypeTrainingData {
+				searchString = arg
+				break
+			}
+		}
+
+		if searchString == "" {
+			fmt.Fprintf(os.Stderr, "Error: Search string is required\n")
+			os.Exit(1)
+		}
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
 		if err != nil {
@@ -979,13 +1112,41 @@ var ocrReCmd = &cobra.Command{
 var ocrReVMCmd = &cobra.Command{
 	Use:   fmt.Sprintf("vm [%s] [%s] [%s]", ArgVMID, ArgTrainingData, ArgPattern),
 	Short: "Search for a regex pattern in VM console OCR results",
-	Long: fmt.Sprintf("%s from a VM console.\n\nExamples:\n  # Search for IP addresses\n  qmp ocr re vm 123 training.json \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\"\n\n  # Search for login attempts (with capture groups and debug output)\n  qmp ocr re vm 123 training.json \"Login (successful|failed)\" --log-level debug\n\n  # Search for errors (case-insensitive, first match only)\n  qmp ocr re vm 123 training.json \"[Ee]rror.*connection\" --first",
+	Long: fmt.Sprintf("%s from a VM console.\n\nThe VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.\nThe training data can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.\n\nExamples:\n  # Explicit arguments\n  qmp ocr re vm 123 training.json \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\"\n\n  # Using environment variables\n  export QMP_VM_ID=123\n  export QMP_TRAINING_DATA=training.json\n  qmp ocr re vm \"\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b\"\n\n  # Search for login attempts (with capture groups and debug output)\n  qmp ocr re vm 123 training.json \"Login (successful|failed)\" --log-level debug\n\n  # Search for errors (case-insensitive, first match only)\n  qmp ocr re vm 123 training.json \"[Ee]rror.*connection\" --first",
 		fmt.Sprintf(RegexDescription, ArgPattern)),
-	Args: cobra.ExactArgs(3),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		trainingDataPath := args[1]
-		pattern := args[2]
+		// Use flexible argument parsing similar to other commands
+		parser := ocr.ParseArguments(args, true) // expectVMID = true
+
+		// For search commands, we need to extract the regex pattern
+		// The pattern is the non-VM, non-training-data argument
+		var vmid, trainingDataPath, pattern string
+
+		if parser.VMID != "" {
+			vmid = parser.VMID
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: VM ID is required: provide as argument or set QMP_VM_ID environment variable\n")
+			os.Exit(1)
+		}
+
+		if parser.TrainingData != "" {
+			trainingDataPath = parser.TrainingData
+		}
+
+		// Find the pattern - it's the argument that's not VM ID or training data
+		for _, arg := range args {
+			fileType := ocr.DetectFileType(arg)
+			if fileType != ocr.FileTypeVMID && fileType != ocr.FileTypeTrainingData {
+				pattern = arg
+				break
+			}
+		}
+
+		if pattern == "" {
+			fmt.Fprintf(os.Stderr, "Error: Regex pattern is required\n")
+			os.Exit(1)
+		}
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
 		if err != nil {
@@ -1153,7 +1314,7 @@ func handleInteractiveTraining(result *ocr.OCRResult, trainingDataPath string) e
 		// Use a default path if none was provided
 		trainingDataPath = qmp.GetDefaultTrainingDataPath()
 		logging.Info("Using default training data location", "path", trainingDataPath)
-		logging.UserInfo("📂 Using default training data: %s", trainingDataPath)
+		logging.UserInfof("📂 Using default training data: %s", trainingDataPath)
 	} else {
 		// Convert to absolute path
 		absPath, err := filepath.Abs(trainingDataPath)

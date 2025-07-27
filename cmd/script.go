@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/jeeftor/qmp-controller/internal/script"
 	"github.com/jeeftor/qmp-controller/internal/validation"
@@ -36,6 +37,9 @@ var scriptCmd = &cobra.Command{
 Each line in the script file is treated as a separate command to be executed.
 Empty lines and comment lines are ignored.
 
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+The training data file can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.
+
 Control commands use configurable prefix (default: <#):
   <# Sleep N         - Sleep for N seconds
   <# Console N       - Switch to console N (1-6) using Ctrl+Alt+F[N]
@@ -45,6 +49,15 @@ Control commands use configurable prefix (default: <#):
 Comments use configurable character (default: #):
   # This is a comment
   \# This types a literal # character
+
+Examples:
+  # Explicit arguments
+  qmp script 106 automation.txt training.json
+
+  # Using environment variables
+  export QMP_VM_ID=106
+  export QMP_TRAINING_DATA=training.json
+  qmp script automation.txt
 
 Training Data Requirements:
   Scripts containing WATCH commands or any OCR functionality require training data:
@@ -70,15 +83,58 @@ Script file example:
   :w
   <# Key enter
   <# WATCH "saved" TIMEOUT 10s`,
-	Args: cobra.RangeArgs(2, 3),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		scriptFile := args[1]
+		// Resolve parameters using parameter resolver
+		resolver := params.NewParameterResolver()
 
-		// Handle optional training data file argument
-		if len(args) >= 3 {
-			scriptOCRConfig.TrainingDataPath = args[2]
-			logging.Info("Using training data from argument", "path", args[2])
+		// Determine parameter layout based on number of arguments
+		var vmid, scriptFile, trainingDataPath string
+
+		if len(args) == 3 {
+			// Traditional format: vmid scriptfile trainingdata
+			vmid = args[0]
+			scriptFile = args[1]
+			trainingDataPath = args[2]
+		} else if len(args) == 2 {
+			// Could be: vmid scriptfile OR scriptfile trainingdata
+			// Try to resolve VM ID from first arg
+			vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+			if err == nil {
+				// First arg is valid VM ID
+				vmid = vmidInfo.Value
+				scriptFile = args[1]
+				trainingDataPath = resolver.ResolveTrainingData([]string{}, -1) // From env or default
+			} else {
+				// First arg is not VM ID, try environment variable
+				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+				vmid = vmidInfo.Value
+				scriptFile = args[0]
+				trainingDataPath = args[1]
+			}
+		} else if len(args) == 1 {
+			// Only script file, VM ID and training data from env vars
+			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			vmid = vmidInfo.Value
+			scriptFile = args[0]
+			trainingDataPath = resolver.ResolveTrainingData([]string{}, -1)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Script file is required\n")
+			os.Exit(1)
+		}
+
+		// Set training data path in OCR config
+		if trainingDataPath != "" {
+			scriptOCRConfig.TrainingDataPath = trainingDataPath
+			logging.Info("Using training data", "path", trainingDataPath)
 		}
 
 		// Get configuration values early
@@ -700,6 +756,13 @@ echo "Script execution completed"
 		fmt.Printf("qmp script 106 my-script.txt\n\n")
 		fmt.Printf("# Execute script with WATCH commands (requires training data):\n")
 		fmt.Printf("qmp script 106 my-script.txt training.json\n\n")
+		fmt.Printf("# Using environment variables (recommended):\n")
+		fmt.Printf("export QMP_VM_ID=106\n")
+		fmt.Printf("export QMP_TRAINING_DATA=training.json\n")
+		fmt.Printf("qmp script my-script.txt                    # Uses env vars for VM ID and training data\n\n")
+		fmt.Printf("# Using configuration profiles:\n")
+		fmt.Printf("qmp --profile dev script my-script.txt      # Uses dev profile settings\n")
+		fmt.Printf("qmp --profile prod script my-script.txt     # Uses production configuration\n\n")
 		fmt.Printf("# Custom comment/control characters:\n")
 		fmt.Printf("qmp script 106 my-script.txt --comment-char \"%%\" --control-char \"<!\"\n\n")
 		fmt.Printf("# Interactive TUI mode:\n")
@@ -708,6 +771,8 @@ echo "Script execution completed"
 		fmt.Printf("• Most lines typed directly to VM (followed by Enter)\n")
 		fmt.Printf("• <# WATCH \"text\" TIMEOUT 30s - Wait for screen text (requires training data)\n")
 		fmt.Printf("• <# Console N - Switch to console 1-6 (Ctrl+Alt+F[N])\n")
+		fmt.Printf("• Environment variable support (QMP_VM_ID, QMP_TRAINING_DATA, etc.)\n")
+		fmt.Printf("• Configuration profiles (--profile dev/prod/test)\n")
 		fmt.Printf("• <# Key combo - Send special keys (enter, esc, ctrl-c, etc.)\n")
 		fmt.Printf("• <# Sleep N - Pause execution for N seconds\n")
 		fmt.Printf("• # Comments (configurable character)\n")

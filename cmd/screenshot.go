@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -23,22 +25,54 @@ var screenshotCmd = &cobra.Command{
 The output format can be specified with the --format flag.
 Supported formats: ppm, png
 
+The VM ID and output file can be provided as arguments or set via environment variables:
+- QMP_VM_ID for the VM ID
+- QMP_OUTPUT_FILE for the output file
+
 When using SSH tunneling with the --socket flag, you may need to specify
 a temporary path on the remote server using --remote-temp flag.
 
 Examples:
-  # Take a screenshot and save it as PNG
+  # Explicit arguments
   qmp screenshot 106 screenshot.png
+
+  # Using environment variables
+  export QMP_VM_ID=106
+  export QMP_OUTPUT_FILE=screenshot.png
+  qmp screenshot
 
   # Take a screenshot with a specific format
   qmp screenshot 106 screenshot.ppm --format ppm
 
   # Take a screenshot with SSH tunneling
   qmp screenshot 106 screenshot.png --socket /tmp/qmp-106.sock --remote-temp /tmp/qmp-screenshot.ppm`,
-	Args: cobra.MinimumNArgs(2),
+	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		outputFile := args[1]
+		// Resolve parameters using parameter resolver
+		resolver := params.NewParameterResolver()
+
+		// Resolve VM ID
+		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		vmid := vmidInfo.Value
+
+		// Resolve output file
+		outputFileInfo := resolver.ResolveOutputFileWithInfo(args, 1)
+		if outputFileInfo.Value == "" {
+			fmt.Fprintf(os.Stderr, "Error: Output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable\n")
+			os.Exit(1)
+		}
+		outputFile := outputFileInfo.Value
+
+		// Log parameter resolution for debugging
+		if vmidInfo.Source != "argument" || outputFileInfo.Source != "argument" {
+			logging.Debug("Parameters resolved from non-argument sources",
+				"vmid", vmid, "vmid_source", vmidInfo.Source,
+				"output_file", outputFile, "output_source", outputFileInfo.Source)
+		}
 
 		// Start timer for performance monitoring
 		timer := logging.StartTimer("screenshot", vmid)
@@ -98,14 +132,14 @@ Examples:
 				"output_path": outputFile,
 			})
 
-			logging.Success("Screenshot saved to %s (%s, %d bytes, %v)",
+			logging.Successf("Screenshot saved to %s (%s, %d bytes, %v)",
 				outputFile, format, stat.Size(), duration)
 		} else {
 			timer.Stop(true, map[string]interface{}{
 				"format": format,
 				"output_path": outputFile,
 			})
-			logging.Success("Screenshot saved to %s (%s)", outputFile, format)
+			logging.Successf("Screenshot saved to %s (%s)", outputFile, format)
 		}
 	},
 }

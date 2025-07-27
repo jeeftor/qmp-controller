@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/spf13/cobra"
 )
 
@@ -12,10 +13,34 @@ import (
 var statusCmd = &cobra.Command{
 	Use:   "status [vmid]",
 	Short: "Query VM status",
-	Long:  `Query the current status of a QEMU virtual machine using QMP.`,
-	Args:  cobra.ExactArgs(1),
+	Long:  `Query the current status of a QEMU virtual machine using QMP.
+
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+
+Examples:
+  # Explicit VM ID
+  qmp status 106
+
+  # Using environment variable
+  export QMP_VM_ID=106
+  qmp status`,
+	Args:  cobra.RangeArgs(0, 1),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
+		// Resolve VM ID using parameter resolver
+		resolver := params.NewParameterResolver()
+		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		vmid := vmidInfo.Value
+
+		// Log parameter resolution for debugging
+		if vmidInfo.Source != "argument" {
+			logging.Debug("Parameter resolved from non-argument source",
+				"vmid", vmid,
+				"source", vmidInfo.Source)
+		}
 
 		// Start timer and create contextual logger
 		timer := logging.StartTimer("status_query", vmid)

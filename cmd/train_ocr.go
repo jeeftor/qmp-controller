@@ -11,6 +11,7 @@ import (
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/render"
 	"github.com/jeeftor/qmp-controller/internal/training"
 	"github.com/spf13/cobra"
@@ -44,25 +45,60 @@ var trainOcrVmCmd = &cobra.Command{
 This command captures a screenshot from the specified VM and runs interactive
 training mode to help you build training data.
 
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+The output file can be provided as an argument or set via the QMP_OUTPUT_FILE environment variable.
+
 The resolution can be set using --res (e.g., '160x50') or individually with --columns
 and --rows. If --res is provided, it takes precedence over --columns and --rows.
 
 Examples:
-  # Train OCR from VM screenshot with default resolution
+  # Explicit arguments
   qmp train-ocr vm 106 training-data.json
 
-  # Train OCR from VM with custom resolution
-  qmp train-ocr vm 106 training-data.json --res 160x50
+  # Using environment variables
+  export QMP_VM_ID=106
+  export QMP_OUTPUT_FILE=training-data.json
+  qmp train-ocr vm
 
-  # Train OCR with individual column and row settings
-  qmp train-ocr vm 106 training-data.json --columns 160 --rows 50
+  # Train OCR with custom resolution
+  qmp train-ocr vm 106 training-data.json --res 160x50
 
   # Update existing training data
   qmp train-ocr vm 106 training-data.json --update`,
-	Args: cobra.ExactArgs(2),
+	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		outputFile := args[1]
+		// Resolve parameters using parameter resolver
+		resolver := params.NewParameterResolver()
+
+		// Resolve VM ID
+		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		vmid := vmidInfo.Value
+
+		// Resolve output file
+		var outputFile string
+		if len(args) >= 2 {
+			outputFile = args[1]
+		} else if len(args) == 1 && vmidInfo.Source == "argument" {
+			// Only VM ID provided as argument, check for output file in env
+			outputFileInfo := resolver.ResolveOutputFileWithInfo([]string{}, -1)
+			if outputFileInfo.Value == "" {
+				fmt.Fprintf(os.Stderr, "Error: Output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable\n")
+				os.Exit(1)
+			}
+			outputFile = outputFileInfo.Value
+		} else {
+			// No arguments, both from env vars
+			outputFileInfo := resolver.ResolveOutputFileWithInfo([]string{}, -1)
+			if outputFileInfo.Value == "" {
+				fmt.Fprintf(os.Stderr, "Error: Output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable\n")
+				os.Exit(1)
+			}
+			outputFile = outputFileInfo.Value
+		}
 
 		runTrainingFlow(vmid, outputFile, true)
 	},

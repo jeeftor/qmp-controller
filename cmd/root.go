@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
@@ -17,6 +18,7 @@ var (
     cfgFile    string
     logLevel   string
     socketPath string
+    profileName string
 
     // Global context and resource management
     contextManager *resource.ContextManager
@@ -54,10 +56,12 @@ func init() {
     rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.qmp.yaml)")
     rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "", "log level (trace, debug, info, warn, error)")
     rootCmd.PersistentFlags().StringVarP(&socketPath, "socket", "s", "", "custom socket path (for SSH tunneling)")
+    rootCmd.PersistentFlags().StringVarP(&profileName, "profile", "p", "", "configuration profile to use")
 
     // Bind flags to Viper
     viper.BindPFlag("log_level", rootCmd.PersistentFlags().Lookup("log-level"))
     viper.BindPFlag("socket", rootCmd.PersistentFlags().Lookup("socket"))
+    viper.BindPFlag("profile", rootCmd.PersistentFlags().Lookup("profile"))
 }
 
 // initResourceManagement initializes the global resource management system
@@ -79,6 +83,33 @@ func initConfig() {
     // Set default values
     viper.SetDefault("log_level", "info")
     viper.SetDefault("socket", "")
+
+    // OCR-related defaults (can be overridden by QMP_* environment variables)
+    viper.SetDefault("columns", 160)  // QMP_COLUMNS
+    viper.SetDefault("rows", 50)      // QMP_ROWS
+    viper.SetDefault("training_data", "")  // QMP_TRAINING_DATA
+    viper.SetDefault("ansi_mode", false)    // QMP_ANSI_MODE
+    viper.SetDefault("color_mode", false)   // QMP_COLOR_MODE
+    viper.SetDefault("filter_blank_lines", false)  // QMP_FILTER_BLANK_LINES
+    viper.SetDefault("show_line_numbers", false)   // QMP_SHOW_LINE_NUMBERS
+    viper.SetDefault("render_special_chars", false) // QMP_RENDER_SPECIAL_CHARS
+    viper.SetDefault("single_char", false)  // QMP_SINGLE_CHAR
+    viper.SetDefault("char_row", 0)         // QMP_CHAR_ROW
+    viper.SetDefault("char_col", 0)         // QMP_CHAR_COL
+    viper.SetDefault("crop_rows", "")       // QMP_CROP_ROWS
+    viper.SetDefault("crop_cols", "")       // QMP_CROP_COLS
+
+    // VM-related defaults
+    viper.SetDefault("vm_id", "")          // QMP_VM_ID
+    viper.SetDefault("image_file", "")     // QMP_IMAGE_FILE
+    viper.SetDefault("output_file", "")    // QMP_OUTPUT_FILE
+
+    // Additional environment variables
+    viper.SetDefault("key_delay", "50ms")       // QMP_KEY_DELAY
+    viper.SetDefault("script_delay", "50ms")    // QMP_SCRIPT_DELAY
+    viper.SetDefault("screenshot_format", "png") // QMP_SCREENSHOT_FORMAT
+    viper.SetDefault("comment_char", "#")       // QMP_COMMENT_CHAR
+    viper.SetDefault("control_char", "<#")      // QMP_CONTROL_CHAR
 
     // Config file setup
     if cfgFile != "" {
@@ -111,6 +142,11 @@ func initConfig() {
             fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
         }
         // It's okay if no config file is found - we'll use defaults and env vars
+    }
+
+    // Apply profile settings if specified
+    if profileName != "" {
+        applyProfile(profileName)
     }
 
     // Update variables from viper
@@ -245,6 +281,43 @@ func takeTemporaryScreenshotLegacy(client *qmp.Client, prefix string) (*os.File,
     }
 
     return tmpFile, nil
+}
+
+// applyProfile applies settings from a named profile
+func applyProfile(profileName string) {
+    profileKey := fmt.Sprintf("profiles.%s", profileName)
+
+    if !viper.IsSet(profileKey) {
+        logging.UserErrorf("Profile '%s' not found in configuration", profileName)
+        os.Exit(1)
+    }
+
+    // Get all profile settings
+    profileSettings := viper.GetStringMap(profileKey)
+    if len(profileSettings) == 0 {
+        logging.UserErrorf("Profile '%s' is empty", profileName)
+        os.Exit(1)
+    }
+
+    logging.Debug("Applying profile settings", "profile", profileName, "settings_count", len(profileSettings))
+
+    // Apply each setting from the profile (only if not already set by flags or env vars)
+    for key, value := range profileSettings {
+        fullKey := key
+
+        // Check if this value is already set by a higher priority source
+        // We don't want to override command line flags or environment variables
+        envKey := "QMP_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+        if os.Getenv(envKey) != "" {
+            continue // Environment variable takes precedence
+        }
+
+        // Set the value from the profile
+        viper.Set(fullKey, value)
+        logging.Debug("Applied profile setting", "profile", profileName, "key", fullKey, "value", value)
+    }
+
+    logging.Info("Applied configuration profile", "profile", profileName)
 }
 
 // getRemoteTempPath determines the remote temp path to use based on flags or config

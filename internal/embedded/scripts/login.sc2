@@ -1,0 +1,129 @@
+#!/usr/bin/env qmp script2
+# Enhanced Script2 Login Example
+# Demonstrates advanced script2 features including variables, conditionals, and loops
+
+# Script metadata and configuration
+@meta description "Advanced login script demonstrating script2 features"
+@meta version "2.0"
+@meta author "QMP Controller"
+
+# Variable definitions
+@set username "admin"
+@set password "secret123"
+@set console_num "2"
+@set login_prompt "login:"
+@set password_prompt "Password:"
+@set max_attempts "3"
+@set current_attempt "1"
+
+# Function definition for login attempt
+@function attempt_login
+    # Type username
+    type ${username}
+    key enter
+
+    # Wait for password prompt
+    @if-found ${password_prompt}
+        # Type password
+        type ${password}
+        key enter
+        return success
+    @else
+        # Password prompt not found
+        return error "Password prompt not found"
+    @end
+@end
+
+# Main script execution starts here
+echo "=== QMP Script2 Login Demo ==="
+echo "Starting enhanced login sequence..."
+
+# Switch to specified console
+console ${console_num}
+sleep 1s
+
+# Take initial screenshot
+@screenshot "login_start.png" png
+
+# Check if already logged in
+@if-found "$ " OR "# "
+    echo "Already logged in!"
+    @screenshot "already_logged_in.png" png
+    exit 0
+@end
+
+# Login loop with retry logic
+@while-not-found "$ " AND timeout 30s
+    echo "Attempt ${current_attempt} of ${max_attempts}"
+
+    # Wait for login prompt
+    @if-found ${login_prompt}
+        echo "Found login prompt, attempting login..."
+
+        # Call login function
+        @call attempt_login
+
+        # Check if login was successful
+        @if-found "$ " OR "# "
+            echo "✓ Login successful!"
+            @screenshot "login_success.png" png
+            break
+        @else
+            # Login failed, increment attempt counter
+            @set current_attempt $((${current_attempt} + 1))
+
+            # Check if max attempts reached
+            @if-greater ${current_attempt} ${max_attempts}
+                echo "✗ Max login attempts reached"
+                @screenshot "login_failed.png" png
+                exit 1
+            @end
+
+            echo "Login failed, retrying in 2 seconds..."
+            sleep 2s
+        @end
+    @else
+        echo "Waiting for login prompt..."
+        sleep 1s
+    @end
+@end
+
+# Post-login commands
+echo "Executing post-login commands..."
+
+# Run some basic commands to verify system
+type "whoami"
+key enter
+sleep 500ms
+
+type "pwd"
+key enter
+sleep 500ms
+
+type "uname -a"
+key enter
+sleep 1s
+
+# Take final screenshot
+@screenshot "login_complete.png" png
+
+echo "=== Login sequence completed successfully ==="
+
+# Example of conditional execution based on system type
+@if-found "Linux"
+    echo "Detected Linux system"
+    type "ls -la"
+    key enter
+@else-if-found "BSD"
+    echo "Detected BSD system"
+    type "ls -lA"
+    key enter
+@else
+    echo "Unknown system type"
+    type "dir" # Try Windows command
+    key enter
+@end
+
+# Cleanup and exit
+sleep 1s
+echo "Script execution finished"

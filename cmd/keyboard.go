@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -32,17 +33,41 @@ var sendKeyCmd = &cobra.Command{
 	Short: "Send a single key press",
 	Long: `Send a single key press to the VM.
 
-Examples:
-  # Send a single character
-  qmp keyboard send 106 a
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
 
-  # Send special keys
+Examples:
+  # Explicit VM ID
+  qmp keyboard send 106 a
   qmp keyboard send 106 enter
-  qmp keyboard send 106 esc`,
-	Args: cobra.ExactArgs(2),
+
+  # Using environment variable
+  export QMP_VM_ID=106
+  qmp keyboard send a
+  qmp keyboard send enter`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		key := args[1]
+		// Resolve VM ID using parameter resolver
+		resolver := params.NewParameterResolver()
+
+		// Check if first arg is VM ID or key
+		var vmid, key string
+		if len(args) == 2 {
+			// Traditional format: vmid key
+			vmid = args[0]
+			key = args[1]
+		} else if len(args) == 1 {
+			// New format with env var: key
+			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1) // No args, use env var
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			vmid = vmidInfo.Value
+			key = args[0]
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Key is required\n")
+			os.Exit(1)
+		}
 
 		client, err := ConnectToVM(vmid)
 		if err != nil {
@@ -71,13 +96,49 @@ var typeTextCmd = &cobra.Command{
 	Short: "Type a string of text",
 	Long: `Type a string of text to the VM.
 
-Example:
-  qmp keyboard type 106 "Hello World"`,
-	Args: cobra.MinimumNArgs(2),
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+
+Examples:
+  # Explicit VM ID
+  qmp keyboard type 106 "Hello World"
+
+  # Using environment variable
+  export QMP_VM_ID=106
+  qmp keyboard type "Hello World"`,
+	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		// Join all remaining args to form the text
-		text := strings.Join(args[1:], " ")
+		// Resolve VM ID using parameter resolver
+		resolver := params.NewParameterResolver()
+
+		// Check if first arg is VM ID or text
+		var vmid, text string
+		if len(args) >= 2 {
+			// Check if first arg is numeric (VM ID)
+			vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+			if err == nil {
+				// First arg is valid VM ID
+				vmid = vmidInfo.Value
+				text = strings.Join(args[1:], " ")
+			} else {
+				// First arg is not VM ID, try environment variable
+				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+				vmid = vmidInfo.Value
+				text = strings.Join(args, " ")
+			}
+		} else {
+			// Only one arg, must be text with VM ID from env var
+			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			vmid = vmidInfo.Value
+			text = args[0]
+		}
 
 		client, err := ConnectToVM(vmid)
 		if err != nil {
@@ -111,19 +172,35 @@ var liveCmd = &cobra.Command{
 This mode captures all keyboard input and sends it to the VM in real-time.
 Press Ctrl+^ (Ctrl+6) to exit live mode.
 
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+
 Supported special keys:
 - Arrow keys (Up, Down, Left, Right)
 - Function keys (F1-F12)
 - Home, End, Page Up, Page Down
 - Insert, Delete
+
+Examples:
+  # Explicit VM ID
+  qmp keyboard live 106
+
+  # Using environment variable
+  export QMP_VM_ID=106
+  qmp keyboard live
 - Tab, Enter, Backspace, Escape
 - Ctrl+key combinations
 
-Example:
-  qmp keyboard live 106`,
-	Args: cobra.ExactArgs(1),
+`,
+	Args: cobra.RangeArgs(0, 1),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
+		// Resolve VM ID using parameter resolver
+		resolver := params.NewParameterResolver()
+		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		vmid := vmidInfo.Value
 
 		client, err := ConnectToVM(vmid)
 		if err != nil {

@@ -17,11 +17,15 @@ A powerful Go-based CLI tool for managing QEMU virtual machines via QMP (QEMU Ma
 ### Advanced Automation
 - **Enhanced Script2 System**: Comprehensive automation with bash-style variables, functions, and control flow
 - **OCR Integration**: Screen-based automation using optical character recognition
+- **Flexible Argument Ordering**: Smart file type detection allows arguments in any order
 - **Interactive Live Mode**: Real-time VM interaction with command history and status display
 - **USB Device Management**: Dynamic USB device attachment and control
 
 ### Developer Tools
+- **Configuration Management**: Complete config system with profiles, validation, and environment variables
 - **VSCode Extension**: Syntax highlighting for script2 files with automated grammar generation
+- **Environment Variable Support**: 23 comprehensive `QMP_*` environment variables with priority system
+- **Profile System**: Named configurations for dev/staging/prod environments
 - **Structured Logging**: Performance monitoring and contextual debugging
 - **Resource Management**: Automatic cleanup and connection pooling
 - **Training Data Generation**: OCR model training and optimization
@@ -45,40 +49,73 @@ make build-mac-arm # ARM64 macOS
 
 ## 🛠️ Quick Start
 
-### Basic VM Control
+### 1. Configuration Setup
 ```bash
-# Check VM status
-qmp status 106
+# Generate a comprehensive configuration file
+qmp config init                               # Creates ~/.qmp.yaml with examples
 
-# Take screenshot
+# Set up common environment variables
+export QMP_VM_ID=106                          # Default VM for all operations
+export QMP_TRAINING_DATA=~/training.json      # OCR training data
+
+# View current configuration
+qmp config show                               # Shows settings and sources
+qmp env                                       # Shows all 23 environment variables
+```
+
+### 2. Basic VM Control (with environment variables)
+```bash
+# Check VM status (uses QMP_VM_ID if set)
+qmp status 106
+qmp status                                    # Uses QMP_VM_ID=106
+
+# Take screenshot (with environment variables)
 qmp screenshot 106 output.png
+qmp screenshot output.png                     # Uses QMP_VM_ID=106
 
 # Interactive keyboard mode
 qmp keyboard live 106
+qmp keyboard live                             # Uses QMP_VM_ID=106
 
 # USB device management
 qmp usb add 106 /dev/sdb
+qmp usb list                                  # Uses QMP_VM_ID=106
 ```
 
-### OCR and Screen Automation
+### 3. Configuration Profiles
+```bash
+# Use profiles for different environments
+qmp --profile dev status                      # Development VM settings
+qmp --profile prod ocr vm "login:"            # Production VM + settings
+qmp --profile test keyboard live              # Test environment
+
+# Profiles can include VM ID, socket paths, OCR settings, etc.
+```
+
+### 4. OCR and Screen Automation
 ```bash
 # Generate OCR training data
-qmp train_ocr 106 training.json
+qmp train_ocr vm 106 training.json
+qmp train_ocr vm training.json                # Uses QMP_VM_ID=106
 
-# Search for text on screen
-qmp ocr find "login:" training.json vm 106
+# Search for text (flexible argument order + env vars)
+qmp ocr find vm 106 training.json "login:"
+qmp ocr find vm "login:"                      # Uses QMP_VM_ID + QMP_TRAINING_DATA
 
 # Regex search
-qmp ocr re "\\berror\\b" training.json vm 106 --ignore-case
+qmp ocr re vm 106 training.json "\\berror\\b" --ignore-case
+qmp ocr re vm "\\berror\\b" --ignore-case     # Uses environment variables
 ```
 
-### Script Automation
+### 5. Script Automation
 ```bash
-# Execute enhanced script with variables
+# Execute enhanced scripts (flexible argument order)
 qmp script2 106 automation.sc2 training.json --var USER=admin
+qmp script2 automation.sc2 --var USER=admin  # Uses QMP_VM_ID + QMP_TRAINING_DATA
 
-# Sample script generation
-qmp script2 sample > my-script.sc2
+# Generate sample scripts
+qmp script2 sample > my-script.sc2            # Enhanced scripting examples
+qmp script sample > basic-script.txt         # Original script format
 ```
 
 ## 📝 Script2 Language
@@ -179,6 +216,7 @@ Built with Cobra framework for consistent CLI experience:
 ```
 cmd/
 ├── root.go          # Base command and configuration
+├── env.go           # Environment variable display
 ├── status.go        # VM status monitoring
 ├── screenshot.go    # Screenshot capture
 ├── keyboard.go      # Interactive keyboard control
@@ -215,6 +253,129 @@ make vscode-extension
 
 ## 🔧 Configuration
 
+QMP Controller features a comprehensive configuration management system supporting configuration files, environment variables, and named profiles for different environments.
+
+### Configuration Management Commands
+
+```bash
+# Generate a comprehensive configuration file
+qmp config init                    # Creates ~/.qmp.yaml
+qmp config init project.yaml       # Creates custom config file
+
+# View current configuration and sources
+qmp config show                    # Shows all settings and their sources
+
+# List available profiles
+qmp config profiles                 # Shows dev/staging/prod profiles
+
+# Validate configuration
+qmp config validate                # Validates current config
+qmp config validate config.yaml    # Validates specific file
+
+# Show configuration search paths
+qmp config path                    # Shows where configs are loaded from
+```
+
+### Configuration Profiles
+
+Profiles allow you to define named collections of settings for different environments:
+
+```bash
+# Use a profile (applies all profile settings)
+qmp --profile dev status           # Uses dev VM and settings
+qmp --profile prod ocr vm          # Uses production configuration
+qmp --profile test usb list        # Uses test environment settings
+
+# Environment variables still override profiles
+QMP_VM_ID=999 qmp --profile dev status  # Uses VM 999 instead of profile's VM
+```
+
+### Configuration Files
+
+Configuration files are searched in priority order:
+1. `~/.qmp.yaml` (user configuration)
+2. `./.qmp.yaml` (project configuration)
+3. `/etc/qmp/.qmp.yaml` (system configuration)
+
+Sample configuration with profiles:
+```yaml
+# Core settings
+log_level: info
+vm_id: 106
+
+# OCR defaults
+columns: 160
+rows: 50
+training_data: ~/training.json
+
+# Profiles for different environments
+profiles:
+  dev:
+    vm_id: 106
+    socket: /var/run/qemu-server/106.qmp
+    training_data: ~/dev-training.json
+
+  prod:
+    vm_id: 200
+    socket: /tmp/prod-qmp-tunnel
+    screenshot_format: ppm
+
+  test:
+    vm_id: 999
+    columns: 80
+    rows: 25
+    ansi_mode: true
+    color_mode: true
+```
+
+### Environment Variables (23 Variables Supported)
+
+QMP Controller supports comprehensive environment variable configuration with the `QMP_` prefix. All settings can be overridden by environment variables:
+
+#### Core Configuration
+- `QMP_LOG_LEVEL`: Logging level (debug, info, warn, error) - default: info
+- `QMP_SOCKET`: Custom socket path for SSH tunneling
+- `QMP_VM_ID`: Default VM ID for operations
+
+#### OCR Configuration
+- `QMP_COLUMNS`: Screen width in characters - default: 160
+- `QMP_ROWS`: Screen height in characters - default: 50
+- `QMP_TRAINING_DATA`: Path to OCR training data file
+- `QMP_IMAGE_FILE`: Default image file for OCR operations
+- `QMP_OUTPUT_FILE`: Default output file for results
+
+#### Timing & Format
+- `QMP_KEY_DELAY`: Keyboard input delay (e.g., 50ms, 100ms) - default: 50ms
+- `QMP_SCRIPT_DELAY`: Script execution delay between commands - default: 50ms
+- `QMP_SCREENSHOT_FORMAT`: Default screenshot format (ppm, png) - default: png
+- `QMP_COMMENT_CHAR`: Script comment character - default: #
+- `QMP_CONTROL_CHAR`: Script control command prefix - default: <#
+
+#### OCR Processing Options
+- `QMP_ANSI_MODE`: Enable ANSI bitmap output (true/false)
+- `QMP_COLOR_MODE`: Enable color output (true/false)
+- `QMP_FILTER_BLANK_LINES`: Filter blank lines from output (true/false)
+- `QMP_SHOW_LINE_NUMBERS`: Show line numbers with output (true/false)
+- `QMP_RENDER_SPECIAL_CHARS`: Render special characters visually (true/false)
+
+#### Advanced OCR Options
+- `QMP_SINGLE_CHAR`: Single character extraction mode (true/false)
+- `QMP_CHAR_ROW`: Row for single character extraction (0-based)
+- `QMP_CHAR_COL`: Column for single character extraction (0-based)
+- `QMP_CROP_ROWS`: Crop rows range (format: "start:end")
+- `QMP_CROP_COLS`: Crop columns range (format: "start:end")
+
+**View all variables**: Use `qmp env` to see current values, sources, and descriptions.
+
+### Configuration Priority
+
+Settings are resolved in this priority order (highest to lowest):
+1. **Command-line flags** (highest priority)
+2. **Environment variables** (`QMP_*`)
+3. **Profile settings** (`--profile name`)
+4. **Configuration file values**
+5. **Built-in defaults** (lowest priority)
+
 ### Socket Setup
 ```bash
 # Simple TCP forwarding (recommended)
@@ -226,15 +387,6 @@ make socket-setup
 # Test connections
 make socket-test
 ```
-
-### Environment Variables
-- `QMP_DEBUG=1`: Enable debug logging
-- `QMP_TRAINING_DATA`: Default OCR training data path
-- `QMP_SOCKET_TIMEOUT`: Connection timeout (default: 30s)
-
-### Configuration Files
-- `.qmp.yaml`: Main configuration
-- `~/.qmp_training_data.json`: OCR training data (persistent)
 
 ## 🧪 Development
 
@@ -267,7 +419,62 @@ qmp script2 106 test.sc2 --dry-run
 - **Error Handling**: Graceful degradation and user-friendly messages
 - **Performance Monitoring**: Built-in timing and metrics collection
 
-## 📋 Makefile Targets
+## 📋 Common Commands
+
+### Configuration Management (✅ Complete System)
+```bash
+# Configuration setup
+qmp config init                                # Generate comprehensive config
+qmp config profiles                            # List available profiles
+qmp config show                               # View current configuration
+
+# Environment variables (✅ 23 Variables Supported)
+qmp env                                       # View all environment variables
+
+# Set common defaults
+export QMP_VM_ID=106                          # Default VM for all operations
+export QMP_COLUMNS=160                        # Screen width
+export QMP_ROWS=50                            # Screen height
+export QMP_TRAINING_DATA=~/my-training.json   # OCR training data
+export QMP_OUTPUT_FILE=output.txt             # Default output file
+export QMP_LOG_LEVEL=debug                    # Logging level
+```
+
+### Using Profiles and Environment Variables
+```bash
+# Profile-based workflows
+qmp --profile dev status                      # Use dev environment settings
+qmp --profile prod ocr vm                     # Use production configuration
+qmp --profile test keyboard live              # Use test environment
+
+# All commands support QMP_VM_ID and environment variables:
+qmp status                                    # Uses QMP_VM_ID if set
+qmp screenshot                                # Uses QMP_VM_ID + QMP_OUTPUT_FILE
+qmp ocr vm                                    # Uses env vars for flexible operation
+qmp usb list                                  # Uses QMP_VM_ID if set
+qmp keyboard live                             # Uses QMP_VM_ID if set
+qmp script automation.txt                     # Uses QMP_VM_ID + QMP_TRAINING_DATA
+qmp script2 automation.sc2                   # Uses QMP_VM_ID + QMP_TRAINING_DATA
+```
+
+### Flexible Argument Ordering (✅ All Commands)
+```bash
+# All these commands are equivalent (smart file type detection):
+qmp ocr vm 106 training.json output.txt
+qmp ocr vm training.json 106 output.txt
+qmp ocr vm output.txt training.json 106
+
+# Script commands with flexible ordering:
+qmp script2 106 automation.sc2 training.json
+qmp script2 automation.sc2 106 training.json
+qmp script2 training.json automation.sc2 106
+
+# With environment variables (even more flexible):
+export QMP_VM_ID=106
+export QMP_TRAINING_DATA=training.json
+qmp ocr vm output.txt                         # VM ID and training data from env
+qmp script2 automation.sc2                   # All parameters from env vars
+```
 
 ### Build Targets
 - `make build` - Build all platform binaries

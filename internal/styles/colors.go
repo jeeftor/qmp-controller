@@ -92,6 +92,40 @@ var (
 
 	LogErrorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(Error))
+
+	// Environment variable display styles
+	HeaderStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(Primary)).
+			Padding(0, 1).
+			Margin(0, 0, 1, 0)
+
+	SectionStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(TextBold)).
+			Margin(1, 0, 0, 0)
+
+	KeyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(Info)).
+			Bold(true)
+
+	ValueStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(Text))
+
+	DefaultStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(TextMuted)).
+			Italic(true)
+
+	LabelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(Accent)).
+			Bold(true)
+
+	DescriptionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(Text))
+
+	CodeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(Primary)).
+			Bold(true)
 )
 
 // ANSI color mapping for backwards compatibility with fatih/color

@@ -486,6 +486,45 @@ func InteractivePrompt(msg string, args ...any) {
 	}
 }
 
+// Printf-style convenience functions for user-facing messages
+// These handle format strings properly for backward compatibility
+
+// Successf logs a formatted success message that users should see
+func Successf(format string, args ...any) {
+	if len(args) > 0 {
+		Info("✓ " + fmt.Sprintf(format, args...))
+	} else {
+		Info("✓ " + format)
+	}
+}
+
+// UserInfof logs formatted informational messages that users should see
+func UserInfof(format string, args ...any) {
+	if len(args) > 0 {
+		Info(fmt.Sprintf(format, args...))
+	} else {
+		Info(format)
+	}
+}
+
+// UserWarnf logs formatted warning messages that users should see
+func UserWarnf(format string, args ...any) {
+	if len(args) > 0 {
+		Warn(fmt.Sprintf(format, args...))
+	} else {
+		Warn(format)
+	}
+}
+
+// UserErrorf logs formatted error messages that users should see
+func UserErrorf(format string, args ...any) {
+	if len(args) > 0 {
+		Error(fmt.Sprintf(format, args...))
+	} else {
+		Error(format)
+	}
+}
+
 // Performance monitoring and metrics
 
 // Timer represents a timing measurement

@@ -11,6 +11,7 @@ import (
 	_ "image/png"
 
 	"github.com/spakin/netpbm"
+	"github.com/spf13/viper"
 
 	"os"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
+	"strconv"
+	"regexp"
 )
 
 // OCRConfig holds all OCR-related configuration options
@@ -54,14 +57,75 @@ type OCRConfig struct {
 }
 
 // NewOCRConfig creates a new OCR configuration with default values
+// Enhanced to support environment variables with QMP_ prefix
 func NewOCRConfig() *OCRConfig {
-	return &OCRConfig{
+	config := &OCRConfig{
 		Columns:     qmp.DEFAULT_WIDTH,
 		Rows:        qmp.DEFAULT_HEIGHT,
 		AnsiMode:    false,
 		ColorMode:   false,
 		CropEnabled: false,
 		SingleChar:  false,
+	}
+
+	// Load from environment variables if available
+	config.LoadFromEnvironment()
+
+	return config
+}
+
+// LoadFromEnvironment loads configuration from environment variables
+// Uses Viper's QMP_ prefix environment variable support
+func (cfg *OCRConfig) LoadFromEnvironment() {
+	// Screen dimensions
+	if viper.IsSet("columns") {
+		cfg.Columns = viper.GetInt("columns")
+	}
+	if viper.IsSet("rows") {
+		cfg.Rows = viper.GetInt("rows")
+	}
+
+	// Processing modes
+	if viper.IsSet("ansi_mode") {
+		cfg.AnsiMode = viper.GetBool("ansi_mode")
+	}
+	if viper.IsSet("color_mode") {
+		cfg.ColorMode = viper.GetBool("color_mode")
+	}
+	if viper.IsSet("filter_blank_lines") {
+		cfg.FilterBlankLines = viper.GetBool("filter_blank_lines")
+	}
+	if viper.IsSet("show_line_numbers") {
+		cfg.ShowLineNumbers = viper.GetBool("show_line_numbers")
+	}
+	if viper.IsSet("render_special_chars") {
+		cfg.RenderSpecialChars = viper.GetBool("render_special_chars")
+	}
+
+	// Training data path
+	if viper.IsSet("training_data") {
+		cfg.TrainingDataPath = viper.GetString("training_data")
+	}
+
+	// Single character mode
+	if viper.IsSet("single_char") {
+		cfg.SingleChar = viper.GetBool("single_char")
+	}
+	if viper.IsSet("char_row") {
+		cfg.CharRow = viper.GetInt("char_row")
+	}
+	if viper.IsSet("char_col") {
+		cfg.CharCol = viper.GetInt("char_col")
+	}
+
+	// Cropping configuration
+	if viper.IsSet("crop_rows") {
+		cfg.CropRowsStr = viper.GetString("crop_rows")
+		cfg.CropEnabled = cfg.CropRowsStr != ""
+	}
+	if viper.IsSet("crop_cols") {
+		cfg.CropColsStr = viper.GetString("crop_cols")
+		cfg.CropEnabled = cfg.CropEnabled || cfg.CropColsStr != ""
 	}
 }
 
@@ -221,7 +285,7 @@ func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, 
 		// Try default location as fallback
 		defaultPath := qmp.GetDefaultTrainingDataPath()
 		logging.Info("Using default training data location", "path", defaultPath)
-		logging.UserInfo("📂 Using default training data: %s", defaultPath)
+		logging.UserInfof("📂 Using default training data: %s", defaultPath)
 
 		trainingData, err = LoadTrainingData(defaultPath)
 		if err == nil && trainingData != nil {
@@ -329,7 +393,7 @@ func ProcessScreenshotWithCropAndTrainingData(screenshotPath, trainingDataPath s
 	} else {
 		// Try default location as fallback
 		defaultPath := qmp.GetDefaultTrainingDataPath()
-		logging.UserInfo("📂 Using default training data: %s", defaultPath)
+		logging.UserInfof("📂 Using default training data: %s", defaultPath)
 		trainingData, err = LoadTrainingData(defaultPath)
 		if err == nil && trainingData != nil {
 			// If training data exists, use it to recognize characters
@@ -955,4 +1019,217 @@ func CreateSimplifiedTrainingData(data *TrainingData) *TrainingData {
 
 	logging.Debug("Created simplified training data", "entries", len(simplified.BitmapMap))
 	return simplified
+}
+
+// FileType represents different types of files that can be auto-detected
+type FileType int
+
+const (
+	FileTypeUnknown FileType = iota
+	FileTypeTrainingData
+	FileTypeImage
+	FileTypeVMID
+	FileTypeOutput
+)
+
+func (ft FileType) String() string {
+	switch ft {
+	case FileTypeTrainingData:
+		return "training_data"
+	case FileTypeImage:
+		return "image"
+	case FileTypeVMID:
+		return "vm_id"
+	case FileTypeOutput:
+		return "output"
+	default:
+		return "unknown"
+	}
+}
+
+// DetectFileType attempts to determine the type of file based on content and extension
+func DetectFileType(path string) FileType {
+	// Check if it looks like a VM ID first (numeric string)
+	if isVMID(path) {
+		return FileTypeVMID
+	}
+
+	// Check if file exists for content-based detection
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// File doesn't exist - could be output file or non-existent training data
+		return detectByExtension(path)
+	}
+
+	// File exists - check content
+	if isTrainingDataFile(path) {
+		return FileTypeTrainingData
+	}
+
+	if isImageFile(path) {
+		return FileTypeImage
+	}
+
+	// Fall back to extension-based detection
+	return detectByExtension(path)
+}
+
+// isVMID checks if a string looks like a VM ID (numeric)
+func isVMID(s string) bool {
+	// VM IDs are typically numeric strings
+	if _, err := strconv.Atoi(s); err == nil {
+		return true
+	}
+	return false
+}
+
+// detectByExtension attempts to classify file type by extension
+func detectByExtension(path string) FileType {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".json":
+		return FileTypeTrainingData
+	case ".ppm", ".png", ".jpg", ".jpeg", ".gif", ".bmp":
+		return FileTypeImage
+	case ".txt", ".out", ".log":
+		return FileTypeOutput
+	default:
+		return FileTypeUnknown
+	}
+}
+
+// isTrainingDataFile checks if a file contains training data by examining its content
+func isTrainingDataFile(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	// Read first 512 bytes to check for JSON structure
+	buffer := make([]byte, 512)
+	n, err := file.Read(buffer)
+	if err != nil && n == 0 {
+		return false
+	}
+
+	content := string(buffer[:n])
+
+	// Check for training data JSON structure
+	// Training data typically contains "bitmapMap" field
+	trainingPattern := regexp.MustCompile(`["']bitmapMap["']\s*:`)
+	return trainingPattern.MatchString(content)
+}
+
+// isImageFile checks if a file is an image by attempting to decode its header
+func isImageFile(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	// Try to decode as image
+	_, format, err := image.DecodeConfig(file)
+	if err == nil && format != "" {
+		return true
+	}
+
+	// Reset file pointer and try netpbm format
+	file.Seek(0, 0)
+	if _, err := netpbm.DecodeConfig(file); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// FlexibleArgumentParser helps parse arguments in flexible order
+type FlexibleArgumentParser struct {
+	VMID         string
+	TrainingData string
+	ImageFile    string
+	OutputFile   string
+	Errors       []string
+}
+
+// ParseArguments attempts to parse arguments in flexible order by auto-detecting types
+func ParseArguments(args []string, expectVMID bool) *FlexibleArgumentParser {
+	parser := &FlexibleArgumentParser{}
+
+	// Classify each argument
+	for i, arg := range args {
+		fileType := DetectFileType(arg)
+
+		switch fileType {
+		case FileTypeVMID:
+			if expectVMID {
+				if parser.VMID == "" {
+					parser.VMID = arg
+				} else {
+					parser.Errors = append(parser.Errors, fmt.Sprintf("Multiple VM IDs provided: %s and %s", parser.VMID, arg))
+				}
+			} else {
+				// If not expecting VM ID, treat as unknown
+				parser.Errors = append(parser.Errors, fmt.Sprintf("Unexpected VM ID: %s", arg))
+			}
+
+		case FileTypeTrainingData:
+			if parser.TrainingData == "" {
+				parser.TrainingData = arg
+			} else {
+				parser.Errors = append(parser.Errors, fmt.Sprintf("Multiple training data files provided: %s and %s", parser.TrainingData, arg))
+			}
+
+		case FileTypeImage:
+			if parser.ImageFile == "" {
+				parser.ImageFile = arg
+			} else {
+				parser.Errors = append(parser.Errors, fmt.Sprintf("Multiple image files provided: %s and %s", parser.ImageFile, arg))
+			}
+
+		case FileTypeOutput, FileTypeUnknown:
+			// Default to output file if we can't determine type
+			if parser.OutputFile == "" {
+				parser.OutputFile = arg
+			} else {
+				// If we already have an output file, this might be misclassified
+				// Let's try to be smart about it
+				if fileType == FileTypeUnknown {
+					// Could be training data without extension
+					if parser.TrainingData == "" {
+						parser.TrainingData = arg
+					} else if parser.ImageFile == "" {
+						parser.ImageFile = arg
+					} else {
+						parser.Errors = append(parser.Errors, fmt.Sprintf("Cannot classify argument %d: %s", i+1, arg))
+					}
+				} else {
+					parser.Errors = append(parser.Errors, fmt.Sprintf("Multiple output files provided: %s and %s", parser.OutputFile, arg))
+				}
+			}
+		}
+	}
+
+	return parser
+}
+
+// Validate checks if the parsed arguments are sufficient for the command
+func (p *FlexibleArgumentParser) Validate(requireVMID, requireTrainingData, requireImageFile bool) []string {
+	var errors []string
+
+	// Add existing parsing errors
+	errors = append(errors, p.Errors...)
+
+	// Check required fields
+	if requireVMID && p.VMID == "" {
+		errors = append(errors, "VM ID is required")
+	}
+	if requireTrainingData && p.TrainingData == "" {
+		errors = append(errors, "Training data file is required")
+	}
+	if requireImageFile && p.ImageFile == "" {
+		errors = append(errors, "Image file is required")
+	}
+
+	return errors
 }

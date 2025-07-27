@@ -282,7 +282,7 @@ func (e *Executor) executeWatch(directive *Directive, logger *logging.Contextual
 			trainingDataPath = qmp.GetDefaultTrainingDataPath()
 			logger.Info("Using default training data location", "path", trainingDataPath)
 			// Also show user-visible message
-			logging.UserInfo("📂 Using default training data: %s", trainingDataPath)
+			logging.UserInfof("📂 Using default training data: %s", trainingDataPath)
 		}
 		width := 160  // TODO: Make configurable from context
 		height := 50  // TODO: Make configurable from context
@@ -385,7 +385,7 @@ func (e *Executor) executeConditionalIfFound(directive *Directive, logger *loggi
 
 	if found {
 		logger.Info("Condition met: text found on screen", "text", searchText)
-		logging.UserInfo("✓ Found '%s' on screen - executing if-found block (%d lines)", searchText, len(directive.Block))
+		logging.UserInfof("✓ Found '%s' on screen - executing if-found block (%d lines)", searchText, len(directive.Block))
 
 		// Execute the conditional block
 		if len(directive.Block) > 0 {
@@ -396,10 +396,10 @@ func (e *Executor) executeConditionalIfFound(directive *Directive, logger *loggi
 
 		// Execute else block if present
 		if len(directive.ElseBlock) > 0 {
-			logging.UserInfo("✗ Text '%s' not found - executing else block (%d lines)", searchText, len(directive.ElseBlock))
+			logging.UserInfof("✗ Text '%s' not found - executing else block (%d lines)", searchText, len(directive.ElseBlock))
 			return e.executeConditionalBlock(directive.ElseBlock, logger)
 		} else {
-			logging.UserInfo("✗ Text '%s' not found - skipping if-found block (%d lines)", searchText, len(directive.Block))
+			logging.UserInfof("✗ Text '%s' not found - skipping if-found block (%d lines)", searchText, len(directive.Block))
 		}
 	}
 
@@ -423,7 +423,7 @@ func (e *Executor) executeConditionalIfNotFound(directive *Directive, logger *lo
 
 	if !found {
 		logger.Info("Condition met: text not found on screen", "text", searchText)
-		logging.UserInfo("✓ Text '%s' not found - executing if-not-found block (%d lines)", searchText, len(directive.Block))
+		logging.UserInfof("✓ Text '%s' not found - executing if-not-found block (%d lines)", searchText, len(directive.Block))
 
 		// Execute the conditional block
 		if len(directive.Block) > 0 {
@@ -434,10 +434,10 @@ func (e *Executor) executeConditionalIfNotFound(directive *Directive, logger *lo
 
 		// Execute else block if present
 		if len(directive.ElseBlock) > 0 {
-			logging.UserInfo("✗ Found '%s' on screen - executing else block (%d lines)", searchText, len(directive.ElseBlock))
+			logging.UserInfof("✗ Found '%s' on screen - executing else block (%d lines)", searchText, len(directive.ElseBlock))
 			return e.executeConditionalBlock(directive.ElseBlock, logger)
 		} else {
-			logging.UserInfo("✗ Found '%s' on screen - skipping if-not-found block (%d lines)", searchText, len(directive.Block))
+			logging.UserInfof("✗ Found '%s' on screen - skipping if-not-found block (%d lines)", searchText, len(directive.Block))
 		}
 	}
 
@@ -631,7 +631,7 @@ func (e *Executor) executeWhileFound(directive *Directive, logger *logging.Conte
 		"timeout", timeout,
 		"poll_interval", pollInterval,
 		"block_lines", len(directive.Block))
-	logging.UserInfo("🔄 While-found loop: searching for '%s' (timeout: %v)", searchText, timeout)
+	logging.UserInfof("🔄 While-found loop: searching for '%s' (timeout: %v)", searchText, timeout)
 
 	startTime := time.Now()
 	iteration := 0
@@ -649,7 +649,7 @@ func (e *Executor) executeWhileFound(directive *Directive, logger *logging.Conte
 
 		if !found {
 			logger.Info("While-found condition no longer met", "text", searchText, "iterations", iteration)
-			logging.UserInfo("✓ While-found loop completed: '%s' no longer found (%d iterations)", searchText, iteration)
+			logging.UserInfof("✓ While-found loop completed: '%s' no longer found (%d iterations)", searchText, iteration)
 			return nil
 		}
 
@@ -679,7 +679,7 @@ func (e *Executor) executeWhileNotFound(directive *Directive, logger *logging.Co
 		"timeout", timeout,
 		"poll_interval", pollInterval,
 		"block_lines", len(directive.Block))
-	logging.UserInfo("🔄 While-not-found loop: waiting for '%s' to appear (timeout: %v)", searchText, timeout)
+	logging.UserInfof("🔄 While-not-found loop: waiting for '%s' to appear (timeout: %v)", searchText, timeout)
 
 	startTime := time.Now()
 	iteration := 0
@@ -697,7 +697,7 @@ func (e *Executor) executeWhileNotFound(directive *Directive, logger *logging.Co
 
 		if found {
 			logger.Info("While-not-found condition no longer met", "text", searchText, "iterations", iteration)
-			logging.UserInfo("✓ While-not-found loop completed: '%s' found (%d iterations)", searchText, iteration)
+			logging.UserInfof("✓ While-not-found loop completed: '%s' found (%d iterations)", searchText, iteration)
 			return nil
 		}
 
@@ -720,7 +720,7 @@ func (e *Executor) executeWhileNotFound(directive *Directive, logger *logging.Co
 func (e *Executor) executeInclude(directive *Directive, logger *logging.ContextualLogger) error {
 	includePath := directive.IncludePath
 	logger.Info("Including script file", "path", includePath)
-	logging.UserInfo("📄 Including script: %s", includePath)
+	logging.UserInfof("📄 Including script: %s", includePath)
 
 	// Read the included script file
 	scriptContent, err := os.ReadFile(includePath)
@@ -779,7 +779,7 @@ func (e *Executor) executeInclude(directive *Directive, logger *logging.Contextu
 	e.context.CurrentLine = originalLine
 
 	logger.Info("Included script executed successfully", "path", includePath, "lines_executed", len(includedScript.Lines))
-	logging.UserInfo("✓ Included script '%s' completed successfully", includePath)
+	logging.UserInfof("✓ Included script '%s' completed successfully", includePath)
 
 	return nil
 }
@@ -790,7 +790,7 @@ func (e *Executor) executeScreenshot(directive *Directive, logger *logging.Conte
 	format := directive.ScreenshotFormat
 
 	logger.Info("Taking screenshot", "path", screenshotPath, "format", format)
-	logging.UserInfo("📸 Taking screenshot: %s (%s)", screenshotPath, format)
+	logging.UserInfof("📸 Taking screenshot: %s (%s)", screenshotPath, format)
 
 	// Expand variables in the screenshot path
 	expandedPath, err := e.context.Variables.Expand(screenshotPath)
@@ -855,11 +855,11 @@ func (e *Executor) executeScreenshot(directive *Directive, logger *logging.Conte
 			"path", expandedPath,
 			"format", format,
 			"size_bytes", fileInfo.Size())
-		logging.UserInfo("✓ Screenshot saved: %s (%s format, %d bytes)",
+		logging.UserInfof("✓ Screenshot saved: %s (%s format, %d bytes)",
 			expandedPath, format, fileInfo.Size())
 	} else {
 		logger.Info("Screenshot saved successfully", "path", expandedPath, "format", format)
-		logging.UserInfo("✓ Screenshot saved: %s (%s format)", expandedPath, format)
+		logging.UserInfof("✓ Screenshot saved: %s (%s format)", expandedPath, format)
 	}
 
 	return nil
@@ -913,7 +913,7 @@ func (e *Executor) executeFunctionCall(directive *Directive, logger *logging.Con
 	args := directive.FunctionArgs
 
 	logger.Info("Calling function", "name", functionName, "args", args)
-	logging.UserInfo("📞 Calling function: %s(%s)", functionName, strings.Join(args, ", "))
+	logging.UserInfof("📞 Calling function: %s(%s)", functionName, strings.Join(args, ", "))
 
 	// Check if function exists
 	if e.script == nil {
@@ -996,7 +996,7 @@ func (e *Executor) executeFunctionCall(directive *Directive, logger *logging.Con
 	}
 
 	logger.Info("Function completed successfully", "name", functionName)
-	logging.UserInfo("✓ Function '%s' completed successfully", functionName)
+	logging.UserInfof("✓ Function '%s' completed successfully", functionName)
 
 	return nil
 }

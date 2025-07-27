@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/script2"
 	"github.com/spf13/cobra"
 )
@@ -32,6 +33,9 @@ Key Features:
 - Environment variable integration
 - Conditional execution based on screen content
 
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+The training data file can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.
+
 Script Format:
   # Variables (bash-style)
   USER=${USER:-admin}
@@ -51,8 +55,13 @@ Script Format:
   }>
 
 Examples:
-  # Execute script with default variables
-  qmp script2 106 login.script
+  # Explicit arguments
+  qmp script2 106 login.script training.json
+
+  # Using environment variables
+  export QMP_VM_ID=106
+  export QMP_TRAINING_DATA=training.json
+  qmp script2 login.script
 
   # Override variables
   qmp script2 106 login.script --var USER=admin --var PASSWORD=secret
@@ -65,16 +74,57 @@ Examples:
 
   # Debug mode with detailed logging
   qmp script2 106 login.script --debug --log-level debug`,
-	Args: cobra.RangeArgs(2, 3),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		vmid := args[0]
-		scriptFile := args[1]
+		// Resolve parameters using parameter resolver
+		resolver := params.NewParameterResolver()
 
-		// Handle optional training data file argument
-		var trainingDataPath string
-		if len(args) >= 3 {
+		// Determine parameter layout based on number of arguments
+		var vmid, scriptFile, trainingDataPath string
+
+		if len(args) == 3 {
+			// Traditional format: vmid scriptfile trainingdata
+			vmid = args[0]
+			scriptFile = args[1]
 			trainingDataPath = args[2]
-			logging.Info("Using training data from argument", "path", trainingDataPath)
+		} else if len(args) == 2 {
+			// Could be: vmid scriptfile OR scriptfile trainingdata
+			// Try to resolve VM ID from first arg
+			vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+			if err == nil {
+				// First arg is valid VM ID
+				vmid = vmidInfo.Value
+				scriptFile = args[1]
+				trainingDataPath = resolver.ResolveTrainingData([]string{}, -1) // From env or default
+			} else {
+				// First arg is not VM ID, try environment variable
+				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+				vmid = vmidInfo.Value
+				scriptFile = args[0]
+				trainingDataPath = args[1]
+			}
+		} else if len(args) == 1 {
+			// Only script file, VM ID and training data from env vars
+			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			vmid = vmidInfo.Value
+			scriptFile = args[0]
+			trainingDataPath = resolver.ResolveTrainingData([]string{}, -1)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Script file is required\n")
+			os.Exit(1)
+		}
+
+		// Log training data source
+		if trainingDataPath != "" {
+			logging.Info("Using training data", "path", trainingDataPath)
 		}
 
 		// Create contextual logger
@@ -94,7 +144,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "file_check",
 			})
-			logging.UserError("Script file '%s' not found", scriptFile)
+			logging.UserErrorf("Script file '%s' not found", scriptFile)
 			os.Exit(1)
 		}
 
@@ -105,7 +155,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "file_read",
 			})
-			logging.UserError("Failed to read script file: %v", err)
+			logging.UserErrorf("Failed to read script file: %v", err)
 			os.Exit(1)
 		}
 
@@ -116,7 +166,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "timeout_parse",
 			})
-			logging.UserError("Invalid timeout format '%s': %v", scriptTimeout, err)
+			logging.UserErrorf("Invalid timeout format '%s': %v", scriptTimeout, err)
 			os.Exit(1)
 		}
 
@@ -131,7 +181,7 @@ Examples:
 				timer.StopWithError(err, map[string]interface{}{
 					"stage": "env_file_load",
 				})
-				logging.UserError("Failed to load environment file: %v", err)
+				logging.UserErrorf("Failed to load environment file: %v", err)
 				os.Exit(1)
 			}
 		}
@@ -142,7 +192,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "variable_override",
 			})
-			logging.UserError("Invalid variable override: %v", err)
+			logging.UserErrorf("Invalid variable override: %v", err)
 			os.Exit(1)
 		}
 
@@ -154,7 +204,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "script_parsing",
 			})
-			logging.UserError("Script parsing failed: %v", err)
+			logging.UserErrorf("Script parsing failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -168,7 +218,7 @@ Examples:
 
 		// Handle dry run mode
 		if dryRun {
-			logging.UserInfo("🔍 Dry run mode: Validating script %s", scriptFile)
+			logging.UserInfof("🔍 Dry run mode: Validating script %s", scriptFile)
 
 			// Create execution context for dry run
 			context := &script2.ExecutionContext{
@@ -190,7 +240,7 @@ Examples:
 				timer.StopWithError(err, map[string]interface{}{
 					"stage": "dry_run",
 				})
-				logging.UserError("Dry run failed: %v", err)
+				logging.UserErrorf("Dry run failed: %v", err)
 				os.Exit(1)
 			}
 
@@ -208,7 +258,7 @@ Examples:
 			if result.Success {
 				logging.Success("Dry run validation completed successfully")
 			} else {
-				logging.UserError("Dry run validation failed: %s", result.Error)
+				logging.UserErrorf("Dry run validation failed: %s", result.Error)
 				os.Exit(1)
 			}
 
@@ -227,7 +277,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "vm_connection",
 			})
-			logging.UserError("Failed to connect to VM: %v", err)
+			logging.UserErrorf("Failed to connect to VM: %v", err)
 			os.Exit(1)
 		}
 		defer client.Close()
@@ -257,7 +307,7 @@ Examples:
 				"stage": "script_execution",
 				"lines_executed": result.LinesExecuted,
 			})
-			logging.UserError("Script execution failed: %v", err)
+			logging.UserErrorf("Script execution failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -269,7 +319,7 @@ Examples:
 				"exit_code": result.ExitCode,
 			})
 
-			logging.Success("Script executed successfully (%d lines, %v)",
+			logging.Successf("Script executed successfully (%d lines, %v)",
 				result.LinesExecuted, duration)
 		} else {
 			timer.StopWithError(fmt.Errorf(result.Error), map[string]interface{}{
@@ -277,7 +327,7 @@ Examples:
 				"exit_code": result.ExitCode,
 			})
 
-			logging.UserError("Script execution failed: %s", result.Error)
+			logging.UserErrorf("Script execution failed: %s", result.Error)
 			os.Exit(result.ExitCode)
 		}
 	},
@@ -518,6 +568,13 @@ echo "To exit with code 1: \\<exit 1>"`
 		fmt.Printf("qmp script2 106 my-enhanced-script.txt\n\n")
 		fmt.Printf("# Execute with WATCH commands (requires training data):\n")
 		fmt.Printf("qmp script2 106 my-enhanced-script.txt training.json\n\n")
+		fmt.Printf("# Using environment variables (recommended):\n")
+		fmt.Printf("export QMP_VM_ID=106\n")
+		fmt.Printf("export QMP_TRAINING_DATA=training.json\n")
+		fmt.Printf("qmp script2 my-enhanced-script.txt          # Uses env vars for VM ID and training data\n\n")
+		fmt.Printf("# Using configuration profiles:\n")
+		fmt.Printf("qmp --profile dev script2 my-script.txt     # Uses dev profile settings\n")
+		fmt.Printf("qmp --profile prod script2 my-script.txt    # Uses production configuration\n\n")
 		fmt.Printf("# Override variables:\n")
 		fmt.Printf("qmp script2 106 my-enhanced-script.txt training.json --var USER=admin --var PASSWORD=secure123\n\n")
 		fmt.Printf("# Load environment file:\n")
@@ -531,6 +588,8 @@ echo "To exit with code 1: \\<exit 1>"`
 		fmt.Printf("• <console N> - Switch to console 1-6\n")
 		fmt.Printf("• <enter>, <tab>, <ctrl+c> - Special key sequences\n")
 		fmt.Printf("• <wait 5s> - Pause execution\n")
+		fmt.Printf("• Environment variable integration (QMP_VM_ID, QMP_TRAINING_DATA, etc.)\n")
+		fmt.Printf("• Configuration profiles (--profile dev/prod/test)\n")
 		fmt.Printf("• <if-found \"text\" 5s>, <if-not-found \"text\" 5s> - Conditional execution blocks\n")
 		fmt.Printf("• <retry N> - Retry block N times on failure\n")
 		fmt.Printf("• <repeat N> - Repeat block N times unconditionally\n")
