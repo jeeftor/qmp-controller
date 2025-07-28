@@ -18,10 +18,11 @@ import (
 	"sort"
 	"strings"
 
+	"regexp"
+	"strconv"
+
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
-	"strconv"
-	"regexp"
 )
 
 // OCRConfig holds all OCR-related configuration options
@@ -511,7 +512,7 @@ func extractCharacterBitmap(img image.Image, x, y, cellWidth, cellHeight int) (C
 	bgR, bgG, bgB, _ := bgColor.RGBA()
 
 	// Debug output for background color detection
-	logging.Debug("Character bitmap extraction",
+	logging.Trace("Character bitmap extraction",
 		"position", fmt.Sprintf("(%d,%d)", x, y),
 		"cellSize", fmt.Sprintf("%dx%d", cellWidth, cellHeight),
 		"backgroundRGB", fmt.Sprintf("(%d,%d,%d)", bgR>>8, bgG>>8, bgB>>8))
@@ -689,7 +690,7 @@ func LoadTrainingData(inputPath string) (*TrainingData, error) {
 	count := 0
 	for hex, char := range data.BitmapMap {
 		if count < 5 {
-			logging.Debug("Training data entry",
+			logging.Trace("Training data entry",
 				"hex", func() string {
 					if len(hex) > 20 {
 						return hex[:20] + "..."
@@ -842,12 +843,12 @@ func recognizeCharacter(bitmap CharacterBitmap, trainingData *TrainingData) stri
 	hexBitmap := FormatBitmapAsHex(&bitmap)
 
 	// Debug logging to trace recognition
-	logging.Debug("Recognizing character",
+	logging.Trace("Recognizing character",
 		"hexBitmap", hexBitmap,
 		"trainingDataSize", len(trainingData.BitmapMap))
 
 	if char, found := trainingData.BitmapMap[hexBitmap]; found {
-		logging.Debug("Character recognized from training data",
+		logging.Trace("Character recognized from training data",
 			"hexBitmap", hexBitmap,
 			"char", char)
 		return char

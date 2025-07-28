@@ -68,33 +68,11 @@ The grammar is automatically synchronized with parser changes to ensure accuracy
 The following patterns were automatically extracted from the parser:
 
 
-#### Structure
-- **emptyLineRegex**: Empty or whitespace-only lines
-
-#### Variables
-- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
-
-#### Comments
-- **commentRegex**: Comment lines starting with #
-
-#### Conditionals
-- **elseRegex**: Else directive: else
-
-#### Debugging
-- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
-
-#### Directives
-- **directiveRegex**: Directive patterns: <something> but not \<something>
-- **escapedDirectiveRegex**: Escaped directive patterns: \<something>
-
 #### Composition
 - **includeRegex**: Include directive: include "script.txt"
 
-#### Control
-- **consoleRegex**: Console switching: console 2
-- **exitRegex**: Exit command: exit 1
-- **waitRegex**: Wait delay: wait 5s
-- **watchRegex**: Watch patterns: watch "text" 30s
+#### Conditionals
+- **elseRegex**: Else directive: else
 
 #### Functions
 - **endFunctionRegex**: End function: end-function
@@ -109,6 +87,38 @@ The following patterns were automatically extracted from the parser:
 - **retryRegex**: Retry directive: retry 3
 - **whileFoundRegex**: While-found loop: while-found "text" 30s poll 1s
 - **whileNotFoundRegex**: While-not-found loop: while-not-found "text" 30s poll 1s
+
+#### Structure
+- **emptyLineRegex**: Empty or whitespace-only lines
+
+#### Variables
+- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
+
+#### Control
+- **consoleRegex**: Console switching: console 2
+- **exitRegex**: Exit command: exit 1
+- **waitRegex**: Wait delay: wait 5s
+- **watchRegex**: Watch patterns: watch "text" 30s
+
+#### Debugging
+- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
+
+#### Directives
+- **directiveRegex**: Directive patterns: <something> but not \<something>
+- **escapedDirectiveRegex**: Escaped directive patterns: \<something>
+
+#### Misc
+- **caseRegex**: Script2 pattern: caseRegex
+- **defaultRegex**: Script2 pattern: defaultRegex
+- **endCaseRegex**: Script2 pattern: endCaseRegex
+- **endIfRegex**: Script2 pattern: endIfRegex
+- **endSwitchRegex**: Script2 pattern: endSwitchRegex
+- **returnRegex**: Script2 pattern: returnRegex
+- **setRegex**: Script2 pattern: setRegex
+- **switchRegex**: Script2 pattern: switchRegex
+
+#### Comments
+- **commentRegex**: Comment lines starting with #
 
 
 ## Development

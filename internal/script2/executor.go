@@ -1,6 +1,7 @@
 package script2
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,6 +34,11 @@ func (e *Executor) Execute(script *Script) (*ExecutionResult, error) {
 		return e.executeDryRun(script, result, startTime)
 	}
 
+	// Initialize debugger if needed
+	if e.debugger != nil && e.debugger.IsEnabled() {
+		logger.Info("Script debugging enabled", "mode", e.debugger.state.Mode)
+	}
+
 	// Execute each line
 	for i, line := range script.Lines {
 		e.context.CurrentLine = i + 1
@@ -47,6 +53,31 @@ func (e *Executor) Execute(script *Script) (*ExecutionResult, error) {
 		// Skip empty lines and comments
 		if line.Type == EmptyLine || line.Type == CommentLine {
 			continue
+		}
+
+		// Check for debugging breakpoint
+		if e.debugger != nil && e.debugger.ShouldBreak(line.LineNumber, line) {
+			action, err := e.debugger.HandleBreak(line.LineNumber, line)
+			if err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("debugger error at line %d: %s", line.LineNumber, err.Error())
+				break
+			}
+
+			switch action {
+			case DebugActionStop:
+				result.Success = false
+				result.Error = "Script execution stopped by debugger"
+				result.ExitCode = 130 // Interrupted
+				logger.Info("Script execution stopped by user")
+				return result, nil
+			case DebugActionScreenshot:
+				// Take debug screenshot
+				if err := e.takeDebugScreenshot(line.LineNumber); err != nil {
+					logger.Error("Failed to take debug screenshot", "error", err)
+				}
+				// Continue with normal execution after screenshot
+			}
 		}
 
 		logger.Debug("Executing line",
@@ -106,10 +137,15 @@ func (e *Executor) executeDryRun(script *Script, result *ExecutionResult, startT
 			"suggestion", warning.Suggestion)
 	}
 
-	// Simulate execution for timing
+	// Simulate execution for timing and provide detailed feedback
 	for _, line := range script.Lines {
 		if line.Type != EmptyLine && line.Type != CommentLine {
 			result.LinesExecuted++
+
+			// Provide detailed dry-run feedback for complex directives
+			if line.Type == DirectiveLine && line.Directive != nil {
+				e.simulateDirectiveExecution(line.Directive, logger)
+			}
 		}
 	}
 
@@ -144,20 +180,29 @@ func (e *Executor) executeLine(line ParsedLine, logger *logging.ContextualLogger
 
 // executeTextLine sends text to the VM
 func (e *Executor) executeTextLine(line ParsedLine, logger *logging.ContextualLogger) error {
-	text := line.ExpandedText
-	if text == "" {
+	// Re-expand the text at execution time to handle function parameters
+	// This is needed because the initial expansion happens at parse time, before function parameters are set
+	text := line.Content
+	expandedText, err := e.context.Variables.Expand(text)
+	if err != nil {
+		logger.Warn("Variable expansion failed", "error", err, "text", text)
+		// Fall back to pre-expanded text if expansion fails
+		expandedText = line.ExpandedText
+	}
+
+	if expandedText == "" {
 		return nil // Empty text, nothing to send
 	}
 
-	logger.Debug("Sending text to VM", "text", text, "length", len(text))
+	logger.Debug("Sending text to VM", "text", expandedText, "original", text, "length", len(expandedText))
 
 	// Use the existing QMP client method for sending strings
-	if err := e.context.Client.SendString(text, getKeyDelay()); err != nil {
+	if err := e.context.Client.SendString(expandedText, getKeyDelay()); err != nil {
 		return fmt.Errorf("failed to send text to VM: %w", err)
 	}
 
 	// Log the keyboard input for debugging
-	logging.LogKeyboard(e.context.VMID, text, "text", getKeyDelay())
+	logging.LogKeyboard(e.context.VMID, expandedText, "text", getKeyDelay())
 
 	return nil
 }
@@ -224,15 +269,60 @@ func (e *Executor) executeDirectiveLine(line ParsedLine, logger *logging.Context
 		// Else directives are handled by their parent conditional, should not be executed directly
 		logger.Debug("Skipping else directive (handled by parent conditional)")
 		return nil
+	case EndIf:
+		// End-if directives are handled during parsing, should not be executed directly
+		logger.Debug("Skipping end-if directive (handled during parsing)")
+		return nil
+	case Return:
+		return e.executeReturn(directive, logger)
+	case Break:
+		return e.executeBreak(directive, logger)
+	case Switch:
+		return e.executeSwitch(directive, logger)
+	case Set:
+		return e.executeSet(directive, logger)
+	case Case, Default, EndCase, EndSwitch:
+		// These directives are handled during parsing as part of switch blocks, should not be executed directly
+		logger.Debug("Skipping switch/case directive (handled during parsing)", "type", directive.Type.String())
+		return nil
 	default:
 		return fmt.Errorf("unsupported directive type: %s", directive.Type.String())
 	}
 }
 
+// FunctionReturnError is a special error type that signals a function return
+type FunctionReturnError struct{}
+
+// BreakLoopError is returned when a break directive is encountered
+type BreakLoopError struct{}
+
+func (e BreakLoopError) Error() string {
+	return "break loop"
+}
+
+func (e FunctionReturnError) Error() string {
+	return "function return"
+}
+
+// executeReturn handles the return directive by returning a special error
+func (e *Executor) executeReturn(directive *Directive, logger *logging.ContextualLogger) error {
+	logger.Info("Executing return directive - exiting function")
+	logging.UserInfof("↩ Returning from function")
+
+	// Check if we're actually in a function
+	if len(e.context.FunctionStack) == 0 {
+		logger.Warn("Return directive used outside of a function")
+		return fmt.Errorf("return directive can only be used inside a function")
+	}
+
+	// Return special error to signal function return
+	return FunctionReturnError{}
+}
+
 // executeKeySequence sends special key sequences
 func (e *Executor) executeKeySequence(directive *Directive, logger *logging.ContextualLogger) error {
 	keyName := directive.KeyName
-	logger.Debug("Sending key sequence", "key", keyName)
+	logger.Info("Sending key sequence", "key", keyName)
 
 	// Map script2 key names to QMP key names
 	qmpKey := mapKeyName(keyName)
@@ -284,8 +374,8 @@ func (e *Executor) executeWatch(directive *Directive, logger *logging.Contextual
 			// Also show user-visible message
 			logging.UserInfof("📂 Using default training data: %s", trainingDataPath)
 		}
-		width := 160  // TODO: Make configurable from context
-		height := 50  // TODO: Make configurable from context
+		width := 160 // TODO: Make configurable from context
+		height := 50 // TODO: Make configurable from context
 
 		// Process the screenshot with OCR
 		results, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, width, height)
@@ -294,6 +384,21 @@ func (e *Executor) executeWatch(directive *Directive, logger *logging.Contextual
 			time.Sleep(1 * time.Second)
 			continue
 		}
+
+		// Log differences if we have previous OCR results
+		if e.lastOCRText != nil && len(e.lastOCRText) > 0 {
+			// Find new or changed lines
+			diffLines := findDifferentLines(e.lastOCRText, results.Text)
+			if len(diffLines) > 0 {
+				logger.Debug("Watch text differences detected", "diff_count", len(diffLines))
+				// Log each different line
+				diffText := strings.Join(diffLines, "\n  ")
+				logger.Debug(fmt.Sprintf("Watch text difference:\n  %s", diffText))
+			}
+		}
+
+		// Store current OCR results for next comparison
+		e.lastOCRText = results.Text
 
 		// Search for the target text by joining all lines
 		screenText := strings.Join(results.Text, "\n")
@@ -375,13 +480,50 @@ func (e *Executor) executeConditionalIfFound(directive *Directive, logger *loggi
 
 	logger.Info("Executing if-found conditional", "text", searchText, "timeout", timeout)
 
-	// Perform OCR search to check if text is found
-	found, err := e.performOCRSearch(searchText, logger)
-	if err != nil {
-		logger.Warn("OCR search failed in if-found conditional", "error", err)
-		// If OCR fails, we consider it as "not found" and don't execute
-		found = false
+	// Set default timeout if not specified
+	if timeout == 0 {
+		timeout = 5 * time.Second
 	}
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Poll for the text until found or timeout
+	found := false
+	var err error
+	pollInterval := 1 * time.Second
+
+	logging.UserInfof("Searching for '%s' (timeout: %v)...", searchText, timeout)
+
+	for {
+		// Check if we need to stop due to timeout
+		select {
+		case <-ctx.Done():
+			logger.Info("Timeout reached while searching for text", "text", searchText, "timeout", timeout)
+			goto searchCompleted
+		default:
+			// Continue searching
+		}
+
+		// Perform OCR search
+		found, err = e.performOCRSearch(searchText, logger)
+		if err != nil {
+			logger.Warn("OCR search failed in if-found conditional", "error", err)
+			// If OCR fails, we continue polling
+			found = false
+		}
+
+		// If found, break the loop
+		if found {
+			break
+		}
+
+		// Sleep for the poll interval before trying again
+		time.Sleep(pollInterval)
+	}
+
+	searchCompleted:
 
 	if found {
 		logger.Info("Condition met: text found on screen", "text", searchText)
@@ -413,13 +555,50 @@ func (e *Executor) executeConditionalIfNotFound(directive *Directive, logger *lo
 
 	logger.Info("Executing if-not-found conditional", "text", searchText, "timeout", timeout)
 
-	// Perform OCR search to check if text is found
-	found, err := e.performOCRSearch(searchText, logger)
-	if err != nil {
-		logger.Warn("OCR search failed in if-not-found conditional", "error", err)
-		// If OCR fails, we consider it as "not found"
-		found = false
+	// Set default timeout if not specified
+	if timeout == 0 {
+		timeout = 5 * time.Second
 	}
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Poll for the text until found or timeout
+	found := false
+	var err error
+	pollInterval := 1 * time.Second
+
+	logging.UserInfof("Searching for '%s' to NOT appear (timeout: %v)...", searchText, timeout)
+
+	for {
+		// Check if we need to stop due to timeout
+		select {
+		case <-ctx.Done():
+			logger.Info("Timeout reached while searching for text", "text", searchText, "timeout", timeout)
+			goto searchCompleted
+		default:
+			// Continue searching
+		}
+
+		// Perform OCR search
+		found, err = e.performOCRSearch(searchText, logger)
+		if err != nil {
+			logger.Warn("OCR search failed in if-not-found conditional", "error", err)
+			// If OCR fails, we continue polling
+			found = false
+		}
+
+		// If not found, break the loop
+		if !found {
+			break
+		}
+
+		// Sleep for the poll interval before trying again
+		time.Sleep(pollInterval)
+	}
+
+searchCompleted:
 
 	if !found {
 		logger.Info("Condition met: text not found on screen", "text", searchText)
@@ -481,8 +660,8 @@ func (e *Executor) performOCRSearch(searchText string, logger *logging.Contextua
 		logger.Debug("Using default training data for conditional", "path", trainingDataPath)
 	}
 
-	width := 160  // TODO: Make configurable from context
-	height := 50  // TODO: Make configurable from context
+	width := 160 // TODO: Make configurable from context
+	height := 50 // TODO: Make configurable from context
 
 	// Process the screenshot with OCR
 	results, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, width, height)
@@ -504,12 +683,59 @@ func (e *Executor) performOCRSearch(searchText string, logger *logging.Contextua
 
 // executeConditionalLine executes conditional logic
 func (e *Executor) executeConditionalLine(line ParsedLine, logger *logging.ContextualLogger) error {
-	// TODO: Implement conditional execution in Phase 3
-	logger.Warn("Conditional execution not yet implemented", "line", line.LineNumber)
-	return fmt.Errorf("conditional execution not implemented yet: %s", line.Content)
+	if line.Directive == nil {
+		return fmt.Errorf("conditional line missing directive data")
+	}
+
+	directive := line.Directive
+	switch directive.Type {
+	case ConditionalIfFound:
+		return e.executeConditionalIfFound(directive, logger)
+	case ConditionalIfNotFound:
+		return e.executeConditionalIfNotFound(directive, logger)
+	default:
+		return fmt.Errorf("unknown conditional directive type: %s", directive.Type)
+	}
 }
 
 // Helper functions
+
+// findDifferentLines compares two sets of OCR text lines and returns lines that are different
+// It focuses on finding new lines that appear in the current OCR results but weren't in the previous results
+func findDifferentLines(previous, current []string) []string {
+	// Create a map of previous lines for quick lookup
+	prevMap := make(map[string]bool)
+	for _, line := range previous {
+		// Skip empty lines
+		if strings.TrimSpace(line) != "" {
+			prevMap[line] = true
+		}
+	}
+
+	// Find lines in current that weren't in previous
+	var diffLines []string
+	for _, line := range current {
+		// Skip empty lines
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// If line wasn't in previous results, add it to diff
+		if !prevMap[line] {
+			diffLines = append(diffLines, line)
+		}
+	}
+
+	// Return lines in bottom-up order (as requested)
+	if len(diffLines) > 1 {
+		// Reverse the slice
+		for i, j := 0, len(diffLines)-1; i < j; i, j = i+1, j-1 {
+			diffLines[i], diffLines[j] = diffLines[j], diffLines[i]
+		}
+	}
+
+	return diffLines
+}
 
 // mapKeyName maps script2 key names to QMP key names
 func mapKeyName(scriptKey string) string {
@@ -987,6 +1213,14 @@ func (e *Executor) executeFunctionCall(directive *Directive, logger *logging.Con
 			"content", line.Content)
 
 		if err := e.executeLine(line, logger); err != nil {
+			// Check if this is a return directive
+			if _, isReturn := err.(FunctionReturnError); isReturn {
+				logger.Info("Function execution returned early", "function", functionName, "line", line.LineNumber)
+				// Early return from function, but not an error
+				break
+			}
+
+			// Regular error
 			logger.Error("Function execution failed",
 				"function", functionName,
 				"line_number", line.LineNumber,
@@ -1047,4 +1281,335 @@ func TakeTemporaryScreenshot(client *qmp.Client, prefix string) (*os.File, error
 	}
 
 	return tmpFile, nil
+}
+
+// executeBreak handles the break directive for loops and debugging
+func (e *Executor) executeBreak(directive *Directive, logger *logging.ContextualLogger) error {
+	logger.Info("Break directive encountered")
+
+	// Check if we're in a debugging context
+	if e.debugger != nil && e.debugger.IsEnabled() {
+		logger.Info("Break directive encountered - triggering debugger")
+		// Should be handled by the debugger in the main execution loop
+		return fmt.Errorf("break directive not handled by debugger")
+	}
+
+	// For loops and switch statements, return a special error to break out
+	logger.Info("Break directive encountered - breaking out of loop or switch")
+	logging.UserInfof("⏹️ Break: Exiting current block")
+	return BreakLoopError{}
+}
+
+// takeDebugScreenshot takes a screenshot for debugging purposes
+func (e *Executor) takeDebugScreenshot(lineNumber int) error {
+	if e.context.Client == nil {
+		return fmt.Errorf("no QMP client available for debug screenshot")
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("debug_line_%d_%s.png", lineNumber, timestamp)
+
+	// Take screenshot
+	if err := e.context.Client.ScreenDump(filename, "png"); err != nil {
+		return fmt.Errorf("failed to take debug screenshot: %w", err)
+	}
+
+	// Log the screenshot
+	logger := logging.NewContextualLogger(e.context.VMID, "script2_debug")
+	logger.Info("Debug screenshot taken",
+		"filename", filename,
+		"line", lineNumber,
+		"timestamp", timestamp)
+
+	return nil
+}
+
+// SetDebugger sets the debugger for this executor
+func (e *Executor) SetDebugger(debugger *Debugger) {
+	e.debugger = debugger
+}
+
+// EnableDebugging enables debugging with the specified mode
+func (e *Executor) EnableDebugging(mode DebugMode) *Debugger {
+	if e.debugger == nil {
+		e.debugger = NewDebugger(e.script, e)
+	}
+	e.debugger.Enable(mode)
+	return e.debugger
+}
+
+// executeSwitch handles the switch-case directive structure
+func (e *Executor) executeSwitch(directive *Directive, logger *logging.ContextualLogger) error {
+	timeout := directive.Timeout
+	pollInterval := directive.PollInterval
+
+	logger.Info("Executing switch directive",
+		"timeout", timeout,
+		"poll_interval", pollInterval,
+		"case_count", len(directive.Cases))
+
+	logging.UserInfof("⚙️ Switch: Checking for %d possible text patterns (timeout: %s)",
+		len(directive.Cases), timeout)
+
+	// Take screenshot and perform OCR search for each case pattern
+	startTime := time.Now()
+	matchedCase := -1
+	matchedText := ""
+
+	for time.Since(startTime) < timeout {
+		// Take temporary screenshot
+		tempFile, err := TakeTemporaryScreenshot(e.context.Client, "script2-switch")
+		if err != nil {
+			logger.Warn("Failed to take screenshot for switch", "error", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// Get the file path for OCR
+		screenshotPath := tempFile.Name()
+		tempFile.Close()
+		defer os.Remove(screenshotPath)
+
+		// Perform OCR on the screenshot
+		trainingDataPath := e.context.TrainingData
+		if trainingDataPath == "" {
+			trainingDataPath = qmp.GetDefaultTrainingDataPath()
+			logger.Info("Using default training data location", "path", trainingDataPath)
+		}
+
+		width := 160 // TODO: Make configurable from context
+		height := 50 // TODO: Make configurable from context
+
+		// Process the screenshot with OCR
+		results, err := ocr.ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath, width, height)
+		if err != nil {
+			logger.Warn("OCR processing failed for switch", "error", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		ocrText := results.Text
+		combinedText := strings.Join(ocrText, "\n")
+		logger.Debug("OCR text for switch", "text", combinedText)
+
+		// Check each case pattern against the OCR text
+		for i, switchCase := range directive.Cases {
+			// Expand variables in the search text
+			searchText, err := e.context.Variables.Expand(switchCase.SearchText)
+			if err != nil {
+				logger.Warn("Variable expansion failed in switch case", "error", err)
+				searchText = switchCase.SearchText // Fall back to unexpanded text
+			}
+
+			logger.Debug("Checking case pattern", "index", i, "pattern", searchText)
+
+			// Check each line of OCR text for the pattern
+			found := false
+			for _, line := range ocrText {
+				if strings.Contains(line, searchText) {
+					found = true
+					break
+				}
+			}
+
+			if found {
+				logger.Info("Found matching case", "index", i, "pattern", searchText)
+				matchedCase = i
+				matchedText = searchText
+				break
+			}
+		}
+
+		// If we found a match, break out of the polling loop
+		if matchedCase >= 0 {
+			break
+		}
+
+		// Sleep before next poll
+		time.Sleep(pollInterval)
+	}
+
+	// If we found a matching case, execute its block
+	if matchedCase >= 0 {
+		logging.UserInfof("✅ Switch: Matched case for text pattern \"%s\"", matchedText)
+		logger.Info("Executing matched case block", "index", matchedCase, "pattern", matchedText)
+
+		// Execute the lines in the matched case
+		for _, line := range directive.Cases[matchedCase].Lines {
+			if err := e.executeLine(line, logger); err != nil {
+				// Check for special return error
+				if _, isReturn := err.(FunctionReturnError); isReturn {
+					return err // Propagate return signal
+				}
+
+				// Check for break error
+				if _, ok := err.(BreakLoopError); ok {
+					logger.Info("Break encountered in switch case, exiting switch")
+					break
+				}
+
+				return fmt.Errorf("error executing case block line: %w", err)
+			}
+		}
+	} else if len(directive.DefaultCase) > 0 {
+		// No match found, execute default case if present
+		logging.UserInfof("⚠️ Switch: No match found, executing default case")
+		logger.Info("No match found, executing default case")
+
+		// Execute the lines in the default case
+		for _, line := range directive.DefaultCase {
+			if err := e.executeLine(line, logger); err != nil {
+				// Check for special return error
+				if _, isReturn := err.(FunctionReturnError); isReturn {
+					return err // Propagate return signal
+				}
+
+				// Check for break error
+				if _, ok := err.(BreakLoopError); ok {
+					logger.Info("Break encountered in default case, exiting switch")
+					break
+				}
+
+				return fmt.Errorf("error executing default case line: %w", err)
+			}
+		}
+	} else {
+		// No match found and no default case
+		logging.UserInfof("⚠️ Switch: No match found (no default case)")
+		logger.Info("No match found and no default case")
+	}
+
+	return nil
+}
+
+// executeSet handles the set directive for variable assignment
+func (e *Executor) executeSet(directive *Directive, logger *logging.ContextualLogger) error {
+	varName := directive.VariableName
+	varValue := directive.VariableValue
+
+	// Expand variables in the value
+	expandedValue, err := e.context.Variables.Expand(varValue)
+	if err != nil {
+		logger.Warn("Variable expansion failed in set directive", "error", err, "value", varValue)
+		// Use the original value if expansion fails
+		expandedValue = varValue
+	}
+
+	logger.Info("Setting variable", "name", varName, "value", expandedValue)
+	logging.UserInfof("📝 Setting variable %s=\"%s\"", varName, expandedValue)
+
+	// Set the variable in the context
+	e.context.Variables.Set(varName, expandedValue)
+
+	return nil
+}
+
+// simulateDirectiveExecution provides detailed dry-run feedback for directives
+func (e *Executor) simulateDirectiveExecution(directive *Directive, logger *logging.ContextualLogger) {
+	switch directive.Type {
+	case Switch:
+		caseCount := len(directive.Cases)
+		hasDefault := len(directive.DefaultCase) > 0
+
+		logger.Info("🔄 [DRY-RUN] Switch directive simulation",
+			"timeout", directive.Timeout,
+			"poll_interval", directive.PollInterval,
+			"case_count", caseCount,
+			"has_default", hasDefault)
+
+		logging.UserInfof("🔄 [DRY-RUN] Switch: Would check for %d text patterns (timeout: %s)",
+			caseCount, directive.Timeout)
+
+		// Show each case pattern
+		for i, switchCase := range directive.Cases {
+			expandedText, err := e.context.Variables.Expand(switchCase.SearchText)
+			if err != nil {
+				expandedText = switchCase.SearchText
+			}
+			// Show both original and expanded if different
+			if expandedText != switchCase.SearchText {
+				logging.UserInfof("   📋 Case %d: Looking for \"%s\" (expanded from \"%s\") (%d actions)",
+					i+1, expandedText, switchCase.SearchText, len(switchCase.Lines))
+			} else {
+				logging.UserInfof("   📋 Case %d: Looking for \"%s\" (%d actions)",
+					i+1, expandedText, len(switchCase.Lines))
+			}
+		}
+
+		if hasDefault {
+			logging.UserInfof("   📋 Default case: %d actions if no match", len(directive.DefaultCase))
+		}
+
+	case FunctionCall:
+		logger.Info("📞 [DRY-RUN] Function call simulation",
+			"function", directive.FunctionName,
+			"args", directive.FunctionArgs)
+
+		logging.UserInfof("📞 [DRY-RUN] Would call function: %s(%s)",
+			directive.FunctionName, strings.Join(directive.FunctionArgs, ", "))
+
+		// Simulate function body if available
+		if e.script != nil {
+			if function, exists := e.script.Functions[directive.FunctionName]; exists {
+				logging.UserInfof("    🔍 [DRY-RUN] Function body simulation (%d lines):", len(function.Lines))
+				for _, line := range function.Lines {
+					if line.Type == DirectiveLine && line.Directive != nil {
+						// Recursively simulate directives in function body
+						e.simulateDirectiveExecution(line.Directive, logger)
+					} else if line.Type == TextLine {
+						logging.UserInfof("       📝 Would type: %s", line.Content)
+					}
+				}
+			} else {
+				logging.UserInfof("    ⚠️ [DRY-RUN] Function '%s' not found", directive.FunctionName)
+			}
+		}
+
+	case Set:
+		expandedValue, err := e.context.Variables.Expand(directive.VariableValue)
+		if err != nil {
+			expandedValue = directive.VariableValue
+		}
+		logger.Info("📝 [DRY-RUN] Variable assignment simulation",
+			"name", directive.VariableName,
+			"value", expandedValue)
+
+		logging.UserInfof("📝 [DRY-RUN] Would set variable: %s=\"%s\"",
+			directive.VariableName, expandedValue)
+
+		// Actually set the variable in dry-run mode for better simulation
+		e.context.Variables.Set(directive.VariableName, expandedValue)
+
+	case Watch:
+		expandedText, err := e.context.Variables.Expand(directive.SearchText)
+		if err != nil {
+			expandedText = directive.SearchText
+		}
+		logger.Info("👁️ [DRY-RUN] Watch directive simulation",
+			"search_text", expandedText,
+			"timeout", directive.Timeout)
+
+		logging.UserInfof("👁️ [DRY-RUN] Would watch for \"%s\" (timeout: %s)",
+			expandedText, directive.Timeout)
+
+	case ConditionalIfFound, ConditionalIfNotFound:
+		expandedText, err := e.context.Variables.Expand(directive.SearchText)
+		if err != nil {
+			expandedText = directive.SearchText
+		}
+		condType := "if-found"
+		if directive.Type == ConditionalIfNotFound {
+			condType = "if-not-found"
+		}
+
+		logger.Info("🔍 [DRY-RUN] Conditional directive simulation",
+			"type", condType,
+			"search_text", expandedText,
+			"timeout", directive.Timeout,
+			"block_lines", len(directive.Block),
+			"else_lines", len(directive.ElseBlock))
+
+		logging.UserInfof("🔍 [DRY-RUN] Would check %s \"%s\" (%d/%d actions)",
+			condType, expandedText, len(directive.Block), len(directive.ElseBlock))
+	}
 }

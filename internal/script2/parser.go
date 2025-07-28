@@ -8,6 +8,22 @@ import (
 	"time"
 )
 
+// parseDuration parses a duration string like "5s" or "30" (seconds implied)
+func parseDuration(s string) (time.Duration, error) {
+	// If the string already has a time unit, parse it directly
+	if strings.HasSuffix(s, "s") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "h") {
+		return time.ParseDuration(s)
+	}
+
+	// Otherwise, assume seconds
+	seconds, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration: %s", s)
+	}
+
+	return time.Duration(seconds) * time.Second, nil
+}
+
 // Line classification patterns
 var (
 	// Variable assignment: USER=value or USER=${USER:-default}
@@ -48,6 +64,15 @@ var (
 
 	// Additional directives
 	elseRegex = regexp.MustCompile(`^else$`)
+
+	// Switch-case directives
+	switchRegex = regexp.MustCompile(`^switch(?:\s+timeout=(\d+(?:\.\d+)?s?))?(?:\s+poll=(\d+(?:\.\d+)?s?))?$`)
+	caseRegex = regexp.MustCompile(`^case\s+"([^"]+)"$`)
+	defaultRegex = regexp.MustCompile(`^default$`)
+	endCaseRegex = regexp.MustCompile(`^end-case$`)
+	endSwitchRegex = regexp.MustCompile(`^end-switch$`)
+	endIfRegex = regexp.MustCompile(`^end-if$`)
+	returnRegex = regexp.MustCompile(`^return$`)
 	includeRegex = regexp.MustCompile(`^include\s+"([^"]+)"$`)
 	screenshotRegex = regexp.MustCompile(`^screenshot\s+"([^"]+)"(?:\s+(png|ppm|jpg))?$`)
 
@@ -55,6 +80,9 @@ var (
 	functionDefRegex = regexp.MustCompile(`^function\s+([a-zA-Z_][a-zA-Z0-9_]*)$`)
 	endFunctionRegex = regexp.MustCompile(`^end-function$`)
 	functionCallRegex = regexp.MustCompile(`^call\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(.+))?$`)
+
+	// Set directive
+	setRegex = regexp.MustCompile(`^set\s+([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"$`)
 )
 
 // ParseScript parses a complete script2 file
@@ -101,23 +129,11 @@ func (p *Parser) ParseScript(content string) (*Script, error) {
 
 		// Handle directives that require block parsing
 		if parsedLine.Type == DirectiveLine && parsedLine.Directive != nil {
-			directiveType := parsedLine.Directive.Type
-			if directiveType == ConditionalIfFound || directiveType == ConditionalIfNotFound ||
-			   directiveType == Retry || directiveType == Repeat ||
-			   directiveType == WhileFound || directiveType == WhileNotFound {
-				// Parse block starting from next line
-				blockLines, elseBlock, nextIndex, err := p.parseDirectiveBlockWithElse(lines, i+1, directiveType)
-				if err != nil {
-					return nil, fmt.Errorf("line %d: %w", i+1, err)
-				}
-
-				// Set the block and optional else block in the directive
-				parsedLine.Directive.Block = blockLines
-				if len(elseBlock) > 0 {
-					parsedLine.Directive.ElseBlock = elseBlock
-				}
-
-				// Skip the lines we've already processed
+			nextIndex, err := p.parseDirectiveBlocks(lines, i, &parsedLine)
+			if err != nil {
+				return nil, fmt.Errorf("line %d: %w", i+1, err)
+			}
+			if nextIndex > i {
 				i = nextIndex - 1 // -1 because the for loop will increment
 			}
 		}
@@ -463,6 +479,74 @@ func (p *Parser) parseDirectiveContent(directive *Directive, content string) err
 		return nil
 	}
 
+	// End-if directive
+	if matches := endIfRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = EndIf
+		return nil
+	}
+
+	// Return directive
+	if matches := returnRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = Return
+		return nil
+	}
+
+	// Switch directive
+	if matches := switchRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = Switch
+
+		// Parse timeout if provided
+		if matches[1] != "" {
+			timeout, err := parseDuration(matches[1])
+			if err != nil {
+				return fmt.Errorf("invalid timeout in switch directive: %s", matches[1])
+			}
+			directive.Timeout = timeout
+		} else {
+			// Default timeout: 30s
+			directive.Timeout = 30 * time.Second
+		}
+
+		// Parse poll interval if provided
+		if matches[2] != "" {
+			pollInterval, err := parseDuration(matches[2])
+			if err != nil {
+				return fmt.Errorf("invalid poll interval in switch directive: %s", matches[2])
+			}
+			directive.PollInterval = pollInterval
+		} else {
+			// Default poll interval: 1s
+			directive.PollInterval = 1 * time.Second
+		}
+
+		return nil
+	}
+
+	// Case directive
+	if matches := caseRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = Case
+		directive.SearchText = matches[1]
+		return nil
+	}
+
+	// Default directive
+	if matches := defaultRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = Default
+		return nil
+	}
+
+	// End-case directive
+	if matches := endCaseRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = EndCase
+		return nil
+	}
+
+	// End-switch directive
+	if matches := endSwitchRegex.FindStringSubmatch(content); len(matches) > 0 {
+		directive.Type = EndSwitch
+		return nil
+	}
+
 	// Include directive: include "script.txt"
 	if matches := includeRegex.FindStringSubmatch(content); len(matches) >= 2 {
 		directive.Type = Include
@@ -520,34 +604,59 @@ func (p *Parser) parseDirectiveContent(directive *Directive, content string) err
 		return nil
 	}
 
+	// Break directive: break
+	if strings.TrimSpace(strings.ToLower(content)) == "break" {
+		directive.Type = Break
+		return nil
+	}
+
+	// Return directive: return
+	if returnRegex.MatchString(content) {
+		directive.Type = Return
+		return nil
+	}
+
+	// Set directive: set variable="value"
+	if matches := setRegex.FindStringSubmatch(content); len(matches) >= 3 {
+		directive.Type = Set
+		directive.VariableName = matches[1]
+		directive.VariableValue = matches[2]
+		return nil
+	}
+
 	return fmt.Errorf("unknown directive type: %s", content)
 }
 
 // parseConditionalDirective parses conditional directives
 func (p *Parser) parseConditionalDirective(directive *Directive, content string) error {
-	// Parse if-found "text" 5s or if-not-found "text" 5s
-	parts := strings.Fields(content)
-	if len(parts) < 3 {
-		return fmt.Errorf("invalid conditional directive format: %s", content)
-	}
-
-	// Extract search text (should be quoted)
-	if !strings.HasPrefix(parts[1], "\"") || !strings.HasSuffix(parts[1], "\"") {
+	// Extract the quoted search text first
+	quoteStart := strings.Index(content, "\"")
+	if quoteStart == -1 {
 		return fmt.Errorf("search text must be quoted in conditional directive: %s", content)
 	}
 
-	directive.SearchText = strings.Trim(parts[1], "\"")
+	quoteEnd := strings.Index(content[quoteStart+1:], "\"")
+	if quoteEnd == -1 {
+		return fmt.Errorf("missing closing quote for search text in conditional directive: %s", content)
+	}
+	quoteEnd += quoteStart + 1 // Adjust for the offset in the substring
 
-	// Parse timeout
-	if len(parts) >= 3 {
-		timeoutStr := parts[2]
+	// Extract the search text
+	directive.SearchText = content[quoteStart+1 : quoteEnd]
+
+	// Get the remaining content after the quoted text
+	remaining := strings.TrimSpace(content[quoteEnd+1:])
+
+	// Parse timeout if present
+	if remaining != "" {
+		timeoutStr := remaining
 		if !strings.HasSuffix(timeoutStr, "s") {
 			timeoutStr += "s"
 		}
 
 		timeout, err := time.ParseDuration(timeoutStr)
 		if err != nil {
-			return fmt.Errorf("invalid timeout in conditional directive: %s", parts[2])
+			return fmt.Errorf("invalid timeout in conditional directive: %s", remaining)
 		}
 		directive.Timeout = timeout
 	}
@@ -638,18 +747,31 @@ func (p *Parser) ValidateScript(script *Script) ValidationResult {
 func (p *Parser) parseDirectiveBlock(lines []string, startIndex int, directiveType DirectiveType) ([]ParsedLine, int, error) {
 	var blockLines []ParsedLine
 	i := startIndex
+	foundEndIf := false
 
-	// Parse lines until we hit another directive, empty line, or end of script
+	// Parse lines until we hit end-if directive, empty line, or end of script
 	for i < len(lines) {
 		line := strings.TrimSpace(lines[i])
 
-		// Stop at empty lines or comments (these end the conditional block)
-		if line == "" || strings.HasPrefix(line, "#") {
+		// Check for end-if directive
+		if line == "<end-if>" {
+			// Parse this line to get the directive
+			_, err := p.ParseLine(lines[i], i+1)
+			if err != nil {
+				return nil, i, fmt.Errorf("error parsing end-if directive at line %d: %w", i+1, err)
+			}
+			foundEndIf = true
+			i++ // Skip the end-if line
+			break // End of conditional block
+		}
+
+		// Stop at empty lines or comments only if we don't have explicit end-if markers
+		if !foundEndIf && (line == "" || strings.HasPrefix(line, "#")) {
 			break
 		}
 
-		// Stop at directives (these end the conditional block)
-		if strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") {
+		// Stop at other directives only if we don't have explicit end-if markers
+		if !foundEndIf && strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") && !strings.Contains(line, "<end-if>") {
 			break
 		}
 
@@ -659,9 +781,8 @@ func (p *Parser) parseDirectiveBlock(lines []string, startIndex int, directiveTy
 			return nil, i, fmt.Errorf("error parsing conditional block line %d: %w", i+1, err)
 		}
 
-		// Only include text and variable lines in conditional blocks
-		// Skip empty lines and comments within blocks
-		if parsedLine.Type == TextLine || parsedLine.Type == VariableLine {
+		// Include all line types in blocks except comments and empty lines
+		if parsedLine.Type != CommentLine && parsedLine.Type != EmptyLine {
 			blockLines = append(blockLines, parsedLine)
 		}
 
@@ -677,13 +798,26 @@ func (p *Parser) parseDirectiveBlockWithElse(lines []string, startIndex int, dir
 	var elseBlockLines []ParsedLine
 	i := startIndex
 	foundElse := false
+	foundEndIf := false
 
-	// Parse lines until we hit another directive, empty line, or end of script
+	// Parse lines until we hit end-if directive, empty line, or end of script
 	for i < len(lines) {
 		line := strings.TrimSpace(lines[i])
 
-		// Stop at empty lines or comments (these end the conditional block)
-		if line == "" || strings.HasPrefix(line, "#") {
+		// Check for end-if directive
+		if line == "<end-if>" {
+			// Parse this line to get the directive
+			_, err := p.ParseLine(lines[i], i+1)
+			if err != nil {
+				return nil, nil, i, fmt.Errorf("error parsing end-if directive at line %d: %w", i+1, err)
+			}
+			foundEndIf = true
+			i++ // Skip the end-if line
+			break // End of conditional block
+		}
+
+		// Stop at empty lines or comments only if we don't have explicit end-if markers
+		if !foundEndIf && (line == "" || strings.HasPrefix(line, "#")) {
 			break
 		}
 
@@ -697,8 +831,8 @@ func (p *Parser) parseDirectiveBlockWithElse(lines []string, startIndex int, dir
 			continue
 		}
 
-		// Stop at other directives (these end the conditional block)
-		if strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") {
+		// Stop at other directives only if we don't have explicit end-if markers
+		if !foundEndIf && strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") && !strings.Contains(line, "<end-if>") {
 			break
 		}
 
@@ -708,8 +842,8 @@ func (p *Parser) parseDirectiveBlockWithElse(lines []string, startIndex int, dir
 			return nil, nil, i, fmt.Errorf("error parsing block line %d: %w", i+1, err)
 		}
 
-		// Only include text and variable lines in blocks
-		if parsedLine.Type == TextLine || parsedLine.Type == VariableLine {
+		// Include all line types in blocks except comments and empty lines
+		if parsedLine.Type != CommentLine && parsedLine.Type != EmptyLine {
 			if foundElse {
 				elseBlockLines = append(elseBlockLines, parsedLine)
 			} else {
@@ -721,6 +855,130 @@ func (p *Parser) parseDirectiveBlockWithElse(lines []string, startIndex int, dir
 	}
 
 	return blockLines, elseBlockLines, i, nil
+}
+
+// parseSwitchBlock parses a switch statement and its cases
+func (p *Parser) parseSwitchBlock(lines []string, startIndex int) ([]SwitchCase, []ParsedLine, int, error) {
+	cases := make([]SwitchCase, 0)
+	var defaultCase []ParsedLine
+
+	i := startIndex + 1 // Skip the switch line
+
+	var currentCase *SwitchCase
+	inDefaultCase := false
+
+	// Parse switch body until end-switch
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+
+		// Check for end-switch
+		if line == "<end-switch>" {
+			// Parse this line to get the directive
+			_, err := p.ParseLine(lines[i], i+1)
+			if err != nil {
+				return nil, nil, i, fmt.Errorf("error parsing end-switch directive at line %d: %w", i+1, err)
+			}
+			i++ // Skip the end-switch line
+			break // End of switch block
+		}
+
+		// Check for case directive
+		if strings.HasPrefix(line, "<case ") && strings.HasSuffix(line, ">") {
+			// If we were in a case, finalize it
+			if currentCase != nil {
+				cases = append(cases, *currentCase)
+				currentCase = nil
+			}
+
+			// Reset default case flag
+			inDefaultCase = false
+
+			// Parse the case directive
+			parsedLine, err := p.ParseLine(lines[i], i+1)
+			if err != nil {
+				return nil, nil, i, fmt.Errorf("error parsing case directive at line %d: %w", i+1, err)
+			}
+
+			// Create a new case
+			currentCase = &SwitchCase{
+				SearchText: parsedLine.Directive.SearchText,
+				Lines:      make([]ParsedLine, 0),
+				LineStart:  i + 1,
+			}
+
+			i++ // Skip the case line
+			continue
+		}
+
+		// Check for default directive
+		if line == "<default>" {
+			// If we were in a case, finalize it
+			if currentCase != nil {
+				cases = append(cases, *currentCase)
+				currentCase = nil
+			}
+
+			// Set default case flag
+			inDefaultCase = true
+
+			// Parse the default directive
+			_, err := p.ParseLine(lines[i], i+1)
+			if err != nil {
+				return nil, nil, i, fmt.Errorf("error parsing default directive at line %d: %w", i+1, err)
+			}
+
+			i++ // Skip the default line
+			continue
+		}
+
+		// Check for end-case directive
+		if line == "<end-case>" {
+			// Parse this line to get the directive
+			_, err := p.ParseLine(lines[i], i+1)
+			if err != nil {
+				return nil, nil, i, fmt.Errorf("error parsing end-case directive at line %d: %w", i+1, err)
+			}
+
+			// If we were in a case, finalize it and set the end line
+			if currentCase != nil {
+				currentCase.LineEnd = i + 1
+				cases = append(cases, *currentCase)
+				currentCase = nil
+			}
+
+			// Reset default case flag
+			inDefaultCase = false
+
+			i++ // Skip the end-case line
+			continue
+		}
+
+		// Parse this line as part of the current case or default
+		parsedLine, err := p.ParseLine(lines[i], i+1)
+		if err != nil {
+			return nil, nil, i, fmt.Errorf("error parsing switch block line %d: %w", i+1, err)
+		}
+
+		// Include all line types except comments and empty lines
+		if parsedLine.Type != CommentLine && parsedLine.Type != EmptyLine {
+			if inDefaultCase {
+				defaultCase = append(defaultCase, parsedLine)
+			} else if currentCase != nil {
+				currentCase.Lines = append(currentCase.Lines, parsedLine)
+			} else {
+				return nil, nil, i, fmt.Errorf("line %d outside of any case or default block", i+1)
+			}
+		}
+
+		i++
+	}
+
+	// If we were still in a case at the end, finalize it
+	if currentCase != nil {
+		cases = append(cases, *currentCase)
+	}
+
+	return cases, defaultCase, i, nil
 }
 
 // parseFunctionDefinition parses a function definition and its body
@@ -754,6 +1012,17 @@ func (p *Parser) parseFunctionDefinition(lines []string, startIndex int, functio
 		parsedLine, err := p.ParseLine(lines[i], i+1)
 		if err != nil {
 			return nil, i, fmt.Errorf("error parsing function body line %d: %w", i+1, err)
+		}
+
+		// Handle directives that require block parsing
+		if parsedLine.Type == DirectiveLine && parsedLine.Directive != nil {
+			nextIndex, err := p.parseDirectiveBlocks(lines, i, &parsedLine)
+			if err != nil {
+				return nil, i, fmt.Errorf("line %d: %w", i+1, err)
+			}
+			if nextIndex > i {
+				i = nextIndex - 1 // -1 because the for loop will increment
+			}
 		}
 
 		// Only include meaningful lines in function body
@@ -814,4 +1083,47 @@ func parseArguments(argString string) []string {
 	}
 
 	return args
+}
+
+// parseDirectiveBlocks handles block parsing for directives that contain nested content
+// This centralizes the logic for parsing conditional blocks, switch statements, etc.
+func (p *Parser) parseDirectiveBlocks(lines []string, currentIndex int, parsedLine *ParsedLine) (int, error) {
+	directive := parsedLine.Directive
+	directiveType := directive.Type
+
+	if directiveType == ConditionalIfFound || directiveType == ConditionalIfNotFound ||
+	   directiveType == Retry || directiveType == Repeat ||
+	   directiveType == WhileFound || directiveType == WhileNotFound {
+		// Parse block starting from next line
+		blockLines, elseBlock, nextIndex, err := p.parseDirectiveBlockWithElse(lines, currentIndex+1, directiveType)
+		if err != nil {
+			return currentIndex, err
+		}
+
+		// Set the block and optional else block in the directive
+		directive.Block = blockLines
+		if len(elseBlock) > 0 {
+			directive.ElseBlock = elseBlock
+		}
+
+		return nextIndex, nil
+
+	} else if directiveType == Switch {
+		// Parse switch block starting from current line
+		cases, defaultCase, nextIndex, err := p.parseSwitchBlock(lines, currentIndex)
+		if err != nil {
+			return currentIndex, err
+		}
+
+		// Set the cases and default case in the directive
+		directive.Cases = cases
+		if len(defaultCase) > 0 {
+			directive.DefaultCase = defaultCase
+		}
+
+		return nextIndex, nil
+	}
+
+	// No block parsing needed for this directive type
+	return currentIndex, nil
 }

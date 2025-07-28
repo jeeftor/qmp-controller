@@ -20,11 +20,11 @@ var (
 	logger *slog.Logger
 
 	// Styles for different log levels using lipgloss
-	traceStyle   = styles.MutedStyle
-	debugStyle   = styles.LogDebugStyle
-	infoStyle    = styles.LogInfoStyle
-	warnStyle    = styles.LogWarnStyle
-	errorStyle   = styles.LogErrorStyle
+	traceStyle = styles.MutedStyle
+	debugStyle = styles.LogDebugStyle
+	infoStyle  = styles.LogInfoStyle
+	warnStyle  = styles.LogWarnStyle
+	errorStyle = styles.LogErrorStyle
 )
 
 // ColorTextHandler is a simple handler that adds colors to log output
@@ -167,9 +167,11 @@ func SetOutput(w io.Writer) {
 	slog.SetDefault(logger)
 }
 
-// Trace logs a trace message (most verbose level)
+// Trace logs a trace message (most detailed level)
 func Trace(msg string, args ...any) {
-	logger.Log(context.Background(), LevelTrace, msg, args...)
+	if logger.Enabled(context.Background(), LevelTrace) {
+		logger.Log(context.Background(), LevelTrace, msg, args...)
+	}
 }
 
 // Debug logs a debug message
@@ -339,7 +341,7 @@ func LogPerformance(operation string, vmid string, metrics map[string]interface{
 
 // LogKeyboard logs keyboard input with timing
 func LogKeyboard(vmid string, input string, inputType string, delay time.Duration) {
-	Debug("Keyboard input sent",
+	Info("Keyboard input sent",
 		"vmid", vmid,
 		"input", input,
 		"input_type", inputType,
@@ -357,8 +359,8 @@ func WithFields(fields map[string]interface{}) *slog.Logger {
 
 // ContextualLogger provides context-aware logging for specific operations
 type ContextualLogger struct {
-	logger *slog.Logger
-	vmid   string
+	logger    *slog.Logger
+	vmid      string
 	operation string
 }
 
@@ -370,9 +372,16 @@ func NewContextualLogger(vmid string, operation string) *ContextualLogger {
 	)
 
 	return &ContextualLogger{
-		logger: contextLogger,
-		vmid: vmid,
+		logger:    contextLogger,
+		vmid:      vmid,
 		operation: operation,
+	}
+}
+
+// Trace logs a trace message with context (most detailed level)
+func (cl *ContextualLogger) Trace(msg string, args ...any) {
+	if logger.Enabled(context.Background(), LevelTrace) {
+		cl.logger.Log(context.Background(), LevelTrace, msg, args...)
 	}
 }
 
@@ -613,10 +622,10 @@ func LogCommandExecution(vmid string, command string, args []string, exitCode in
 	logger := NewContextualLogger(vmid, "command_execution")
 
 	metrics := map[string]interface{}{
-		"command":   command,
-		"args":      args,
-		"exit_code": exitCode,
-		"duration":  duration,
+		"command":     command,
+		"args":        args,
+		"exit_code":   exitCode,
+		"duration":    duration,
 		"output_size": len(output),
 	}
 
@@ -632,9 +641,9 @@ func LogResourceUsage(vmid string, operation string, memoryMB float64, cpuPercen
 	logger := NewContextualLogger(vmid, operation)
 
 	metrics := map[string]interface{}{
-		"memory_mb":    memoryMB,
-		"cpu_percent":  cpuPercent,
-		"disk_mb":      diskMB,
+		"memory_mb":   memoryMB,
+		"cpu_percent": cpuPercent,
+		"disk_mb":     diskMB,
 	}
 
 	logger.WithMetrics(slog.LevelDebug, "Resource usage metrics", metrics)
@@ -645,10 +654,10 @@ func LogNetworkOperation(vmid string, operation string, bytes int64, duration ti
 	logger := NewContextualLogger(vmid, "network_"+operation)
 
 	metrics := map[string]interface{}{
-		"bytes":      bytes,
-		"duration":   duration,
-		"success":    success,
-		"endpoint":   endpoint,
+		"bytes":         bytes,
+		"duration":      duration,
+		"success":       success,
+		"endpoint":      endpoint,
 		"bytes_per_sec": float64(bytes) / duration.Seconds(),
 	}
 

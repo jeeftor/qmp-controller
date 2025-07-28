@@ -521,93 +521,6 @@ func processCommentLine(line, commentPrefix string) (string, bool) {
 	return line, false
 }
 
-// processWatchCommand handles WATCH commands with timeout support
-func processWatchCommand(parts []string, lineNum int, client *qmp.Client) error {
-	// Expected format: WATCH "string" TIMEOUT 30s
-	if len(parts) < 4 {
-		return fmt.Errorf("Invalid WATCH command format. Use <# WATCH \"string\" TIMEOUT 30s")
-	}
-
-	// Parse the watch string (should be quoted)
-	watchString := ""
-	timeoutStr := ""
-
-	// Find the quoted string
-	commandStr := strings.Join(parts[1:], " ")
-	if !strings.Contains(commandStr, "\"") {
-		return fmt.Errorf("WATCH string must be quoted")
-	}
-
-	// Extract quoted string
-	startQuote := strings.Index(commandStr, "\"")
-	endQuote := strings.Index(commandStr[startQuote+1:], "\"")
-	if endQuote == -1 {
-		return fmt.Errorf("WATCH string must be properly quoted")
-	}
-
-	watchString = commandStr[startQuote+1 : startQuote+1+endQuote]
-	remaining := strings.TrimSpace(commandStr[startQuote+1+endQuote+1:])
-
-	// Parse TIMEOUT
-	timeoutParts := strings.Fields(remaining)
-	if len(timeoutParts) != 2 || strings.ToLower(timeoutParts[0]) != "timeout" {
-		return fmt.Errorf("WATCH command must specify TIMEOUT")
-	}
-
-	timeoutStr = timeoutParts[1]
-	timeout, err := time.ParseDuration(timeoutStr)
-	if err != nil {
-		return fmt.Errorf("Invalid timeout duration '%s': %v", timeoutStr, err)
-	}
-
-	logging.Info("Executing WATCH command", "string", watchString, "timeout", timeout)
-
-	// Get WATCH configuration
-	trainingData := getOCRTrainingData()
-	width := getWatchWidth()
-	height := getWatchHeight()
-	pollInterval := getWatchPollInterval()
-
-	if trainingData == "" {
-		return fmt.Errorf("WATCH command requires training data. Use --training-data flag or set in config")
-	}
-
-	if width <= 0 || height <= 0 {
-		return fmt.Errorf("WATCH command requires valid screen dimensions. Use --columns and --watchrows")
-	}
-
-	logging.Debug("WATCH configuration", "trainingData", trainingData, "width", width, "height", height, "pollInterval", pollInterval)
-
-	// Check for remote socket usage - WATCH mode is incompatible with remote connections
-	if getRemoteTempPath() != "" {
-		return fmt.Errorf("WATCH command is not compatible with remote socket connections (--socket or --remote-temp). Screenshots are saved remotely but OCR processing requires local file access")
-	}
-
-	// Implement the WATCH loop
-	startTime := time.Now()
-	for time.Since(startTime) < timeout {
-		found, err := performWatchCheck(client, watchString, trainingData, width, height)
-		if err != nil {
-			logging.Debug("WATCH check error", "error", err)
-			// Continue trying on errors
-		} else if found {
-			logging.Info("WATCH string found", "string", watchString, "elapsed", time.Since(startTime))
-			// Log success and provide user feedback
-			logging.Info("WATCH condition satisfied",
-				"search_string", watchString,
-				"elapsed_time", time.Since(startTime).Round(time.Millisecond))
-			fmt.Printf("✓ Found '%s' after %v\n", watchString, time.Since(startTime).Round(time.Millisecond))
-			return nil
-		}
-
-		// Sleep before next check
-		time.Sleep(pollInterval)
-	}
-
-	// Timeout reached
-	logging.Info("WATCH timeout reached", "string", watchString, "timeout", timeout)
-	return fmt.Errorf("WATCH timeout: '%s' not found within %v", watchString, timeout)
-}
 
 // performWatchCheck takes a screenshot, runs OCR, and searches for the target string
 func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string, width, height int) (bool, error) {
@@ -637,28 +550,6 @@ func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string,
 	return searchResults.Found, nil
 }
 
-// Helper functions to get WATCH configuration values
-func getOCRTrainingData() string {
-	return scriptOCRConfig.TrainingDataPath
-}
-
-func getWatchWidth() int {
-	return scriptOCRConfig.Columns
-}
-
-func getWatchHeight() int {
-	return scriptOCRConfig.Rows
-}
-
-func getWatchPollInterval() time.Duration {
-	if watchPollInterval > 0 {
-		return watchPollInterval
-	}
-	if viper.IsSet("script.watch_poll_interval") {
-		return viper.GetDuration("script.watch_poll_interval")
-	}
-	return 1 * time.Second // Default: check every second
-}
 
 // scriptSampleCmd shows a sample script with all available features
 var scriptSampleCmd = &cobra.Command{

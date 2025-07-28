@@ -60,6 +60,15 @@ const (
 	FunctionDef                    // <function name>
 	EndFunction                    // <end-function>
 	FunctionCall                   // <call function_name args...>
+	Break                          // <break> - Debug breakpoint
+	EndIf                          // <end-if> - End of conditional block
+	Return                         // <return> - Return from function
+	Switch                         // <switch timeout=30s poll=1s>
+	Case                           // <case "text pattern">
+	Default                        // <default>
+	EndCase                        // <end-case>
+	EndSwitch                      // <end-switch>
+	Set                            // <set variable="value">
 )
 
 // String returns a human-readable representation of the DirectiveType
@@ -101,6 +110,24 @@ func (dt DirectiveType) String() string {
 		return "end_function"
 	case FunctionCall:
 		return "function_call"
+	case Break:
+		return "break"
+	case EndIf:
+		return "end_if"
+	case Return:
+		return "return"
+	case Switch:
+		return "switch"
+	case Case:
+		return "case"
+	case Default:
+		return "default"
+	case EndCase:
+		return "end_case"
+	case EndSwitch:
+		return "end_switch"
+	case Set:
+		return "set"
 	default:
 		return "unknown"
 	}
@@ -127,6 +154,10 @@ type Directive struct {
 	ScreenshotFormat string      `json:"screenshot_format"` // Screenshot format (png, ppm, jpg)
 	FunctionName string          `json:"function_name"`     // For function definition and calls
 	FunctionArgs []string        `json:"function_args"`     // For function call arguments
+	Cases       []SwitchCase     `json:"cases,omitempty"`   // For switch directive cases
+	DefaultCase []ParsedLine     `json:"default_case,omitempty"` // For switch default case
+	VariableName string          `json:"variable_name"`     // For set directive variable name
+	VariableValue string         `json:"variable_value"`    // For set directive variable value
 }
 
 // ParsedLine represents a single parsed line from a script2 file
@@ -139,6 +170,14 @@ type ParsedLine struct {
 	Directive    *Directive        `json:"directive,omitempty"` // For directive lines
 	ExpandedText string            `json:"expanded_text"`     // After variable substitution
 	Indent       int               `json:"indent"`            // Indentation level
+}
+
+// SwitchCase represents a single case in a switch statement
+type SwitchCase struct {
+	SearchText string       `json:"search_text"` // Text pattern to match
+	Lines      []ParsedLine `json:"lines"`       // Lines to execute if pattern matches
+	LineStart  int          `json:"line_start"`  // For error reporting
+	LineEnd    int          `json:"line_end"`    // For error reporting
 }
 
 // Function represents a parsed function definition
@@ -228,17 +267,20 @@ func NewParser(variables *VariableExpander, debug bool) *Parser {
 
 // Executor handles script execution
 type Executor struct {
-	context  *ExecutionContext
-	parser   *Parser
-	script   *Script
-	debug    bool
+	context     *ExecutionContext
+	parser      *Parser
+	script      *Script
+	debug       bool
+	debugger    *Debugger
+	lastOCRText []string // Stores the last OCR text result for diff comparison
 }
 
 // NewExecutor creates a new script executor
 func NewExecutor(context *ExecutionContext, debug bool) *Executor {
 	return &Executor{
-		context: context,
-		debug:   debug,
+		context:     context,
+		debug:       debug,
+		lastOCRText: make([]string, 0), // Initialize empty slice for OCR text comparison
 	}
 }
 

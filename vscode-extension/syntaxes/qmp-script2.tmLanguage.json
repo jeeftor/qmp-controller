@@ -416,6 +416,42 @@
         }
       ]
     },
+    "misc": {
+      "patterns": [
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^case\\s+\"([^\"]+)\"$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^default$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^end-case$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^end-if$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^end-switch$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^return$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^set\\s+([a-zA-Z_][a-zA-Z0-9_]*)=\"([^\"]*)\"$"
+        },
+        {
+          "name": "markup.other.qmp-script2",
+          "match": "^switch(?:\\s+timeout=(\\d+(?:\\.\\d+)?s?))?(?:\\s+poll=(\\d+(?:\\.\\d+)?s?))?$"
+        }
+      ]
+    },
     "strings": {
       "patterns": [
         {

@@ -72,6 +72,13 @@ training-data.json
 vscode-extension/*.vsix
 vscode-extension/node_modules/
 
+# JetBrains plugin build artifacts
+jetbrains-plugin/build/
+jetbrains-plugin/.gradle/
+jetbrains-plugin/src/main/gen/
+jetbrains-plugin/*.zip
+jetbrains-plugin/*.jar
+
 # Local development files
 dev.json
 map
@@ -94,3 +101,22 @@ examples/*.txt
 examples/*.script
 examples/*.script2
 examples/*.sc2
+
+# Generated documentation and test files
+script2.md.backup
+test-config.yaml
+test_debug.sc2
+test*.txt
+test*.sc2
+
+# Generated binaries (keep in root)
+qmp-controller
+
+# Docker-related files
+.dockerignore.backup
+docker-compose.override.yml
+.docker/
+
+# Coverage reports
+coverage/
+*.html

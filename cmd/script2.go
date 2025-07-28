@@ -13,10 +13,13 @@ import (
 
 var (
 	// Script2 command flags
-	scriptVars    []string // --var key=value
-	envFile       string   // --env-file .env
-	dryRun        bool     // --dry-run
-	scriptTimeout string   // --timeout 300s
+	scriptVars       []string // --var key=value
+	envFile          string   // --env-file .env
+	dryRun           bool     // --dry-run
+	scriptTimeout    string   // --timeout 300s
+	debugMode        bool     // --debug (step mode)
+	debugInteractive bool     // --debug-interactive (TUI mode)
+	debugBreakpoints []int    // --breakpoint line1,line2,line3
 )
 
 // script2Cmd represents the enhanced script command
@@ -32,6 +35,7 @@ Key Features:
 - Most lines are typed as-is (minimal directive syntax)
 - Environment variable integration
 - Conditional execution based on screen content
+- Interactive debugging with <break> directive and TUI debugger
 
 The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
 The training data file can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.
@@ -54,6 +58,12 @@ Script Format:
       ssh backup@server
   }>
 
+  # Debugging support
+  echo "Starting complex process..."
+  <break>    # Pause execution for debugging
+  complex_command
+  <watch "completed" 30s>
+
 Examples:
   # Explicit arguments
   qmp script2 106 login.script training.json
@@ -73,7 +83,13 @@ Examples:
   qmp script2 106 login.script --dry-run
 
   # Debug mode with detailed logging
-  qmp script2 106 login.script --debug --log-level debug`,
+  qmp script2 106 login.script --debug --log-level debug
+
+  # Interactive debugging with TUI
+  qmp script2 106 login.script --debug-interactive
+
+  # Set breakpoints on specific lines
+  qmp script2 106 login.script --breakpoint 10,25,50 --debug`,
 	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		// Resolve parameters using parameter resolver
@@ -297,6 +313,29 @@ Examples:
 		executor := script2.NewExecutor(context, logger.Debug != nil)
 		executor.SetParser(parser)
 		executor.SetScript(script) // Set script for function access
+
+		// Set up debugging if requested
+		if debugMode || debugInteractive || len(debugBreakpoints) > 0 {
+			var debugModeType script2.DebugMode
+			if debugInteractive {
+				debugModeType = script2.DebugModeInteractive
+				logging.UserInfo("🐛 Interactive debugging enabled - TUI will appear on breakpoints")
+			} else if debugMode {
+				debugModeType = script2.DebugModeStep
+				logging.UserInfo("🐛 Step debugging enabled - will break on each line")
+			} else {
+				debugModeType = script2.DebugModeBreakpoints
+				logging.UserInfo("🐛 Breakpoint debugging enabled")
+			}
+
+			debugger := executor.EnableDebugging(debugModeType)
+
+			// Set initial breakpoints
+			for _, lineNum := range debugBreakpoints {
+				debugger.AddBreakpoint(lineNum)
+				logging.UserInfof("🔴 Breakpoint set on line %d", lineNum)
+			}
+		}
 
 		logging.Progress("Executing script %s on VM %s", scriptFile, vmid)
 
@@ -627,6 +666,16 @@ func init() {
 
 	script2Cmd.Flags().StringVar(&scriptTimeout, "timeout", "300s",
 		"Overall script execution timeout")
+
+	// Debugging flags
+	script2Cmd.Flags().BoolVar(&debugMode, "debug", false,
+		"Enable step-by-step debugging mode")
+
+	script2Cmd.Flags().BoolVar(&debugInteractive, "debug-interactive", false,
+		"Enable interactive TUI debugging mode")
+
+	script2Cmd.Flags().IntSliceVar(&debugBreakpoints, "breakpoint", []int{},
+		"Set breakpoints on specific line numbers (comma-separated)")
 
 	// Add help examples
 	script2Cmd.Example = `  # Execute script with enhanced features (no OCR/WATCH)

@@ -9,20 +9,22 @@ import (
 
 // Variable expansion patterns (bash-compatible)
 var (
-	// $VAR or ${VAR}
-	simpleVarPattern = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	// $VAR or ${VAR} - also allow numeric names for function parameters
+	simpleVarPattern = regexp.MustCompile(`\$([A-Za-z0-9_][A-Za-z0-9_]*)|\$\{([A-Za-z0-9_][A-Za-z0-9_]*)\}`)
 
 	// ${VAR:-default} - use default if VAR is unset or empty
-	defaultPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):-([^}]*)\}`)
+	defaultPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):-(.*?)\}`)
 
 	// ${VAR:=default} - set VAR to default if unset or empty, then use value
-	assignPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):=([^}]*)\}`)
+	assignPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):=([^}]*)\}`)
 
 	// ${VAR:+value} - use value if VAR is set and non-empty
-	conditionalPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):+([^}]*)\}`)
+	conditionalPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):+([^}]*)\}`)
 
 	// Variable assignment pattern: VAR=value or VAR=${...}
 	assignmentPattern = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	// Note: We keep the assignment pattern restricted to variables starting with letters
+	// because we don't want to allow numeric variable names for assignments
 )
 
 // Get retrieves a variable value with precedence: overrides > variables > environment
@@ -55,7 +57,8 @@ func (ve *VariableExpander) Set(name, value string) {
 
 // Expand performs bash-style variable expansion on the given text
 func (ve *VariableExpander) Expand(text string) (string, error) {
-	result := text
+	// Replace escaped dollar signs with a temporary placeholder
+	result := strings.ReplaceAll(text, "\\$", "__ESCAPED_DOLLAR__")
 
 	// Process ${VAR:+value} first (conditional expansion)
 	result = conditionalPattern.ReplaceAllStringFunc(result, func(match string) string {
@@ -130,6 +133,9 @@ func (ve *VariableExpander) Expand(text string) (string, error) {
 		// Variable not found, return empty string (bash behavior)
 		return ""
 	})
+
+	// Restore escaped dollar signs
+	result = strings.ReplaceAll(result, "__ESCAPED_DOLLAR__", "$")
 
 	return result, nil
 }
