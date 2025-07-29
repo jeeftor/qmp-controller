@@ -2,10 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/params"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -30,8 +30,7 @@ Examples:
 		resolver := params.NewParameterResolver()
 		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			utils.ValidationError(err)
 		}
 		vmid := vmidInfo.Value
 
@@ -54,7 +53,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "connection",
 			})
-			os.Exit(1)
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
 
@@ -64,7 +63,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "status_query",
 			})
-			os.Exit(1)
+			utils.FatalError(err, "querying VM status")
 		}
 
 		// Extract key status values for structured logging

@@ -68,8 +68,11 @@ The grammar is automatically synchronized with parser changes to ensure accuracy
 The following patterns were automatically extracted from the parser:
 
 
-#### Conditionals
-- **elseRegex**: Else directive: else
+#### Comments
+- **commentRegex**: Comment lines starting with #
+
+#### Composition
+- **includeRegex**: Include directive: include "script.txt"
 
 #### Control
 - **consoleRegex**: Console switching: console 2
@@ -77,8 +80,9 @@ The following patterns were automatically extracted from the parser:
 - **waitRegex**: Wait delay: wait 5s
 - **watchRegex**: Watch patterns: watch "text" 30s
 
-#### Debugging
-- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
+#### Directives
+- **directiveRegex**: Directive patterns: <something> but not \<something>
+- **escapedDirectiveRegex**: Escaped directive patterns: \<something>
 
 #### Keys
 - **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
@@ -89,6 +93,20 @@ The following patterns were automatically extracted from the parser:
 - **whileFoundRegex**: While-found loop: while-found "text" 30s poll 1s
 - **whileNotFoundRegex**: While-not-found loop: while-not-found "text" 30s poll 1s
 
+#### Structure
+- **emptyLineRegex**: Empty or whitespace-only lines
+
+#### Conditionals
+- **elseRegex**: Else directive: else
+
+#### Debugging
+- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
+
+#### Functions
+- **endFunctionRegex**: End function: end-function
+- **functionCallRegex**: Function call: call function_name args...
+- **functionDefRegex**: Function definition: function name
+
 #### Misc
 - **caseRegex**: Script2 pattern: caseRegex
 - **defaultRegex**: Script2 pattern: defaultRegex
@@ -98,24 +116,6 @@ The following patterns were automatically extracted from the parser:
 - **returnRegex**: Script2 pattern: returnRegex
 - **setRegex**: Script2 pattern: setRegex
 - **switchRegex**: Script2 pattern: switchRegex
-
-#### Structure
-- **emptyLineRegex**: Empty or whitespace-only lines
-
-#### Comments
-- **commentRegex**: Comment lines starting with #
-
-#### Composition
-- **includeRegex**: Include directive: include "script.txt"
-
-#### Directives
-- **directiveRegex**: Directive patterns: <something> but not \<something>
-- **escapedDirectiveRegex**: Escaped directive patterns: \<something>
-
-#### Functions
-- **endFunctionRegex**: End function: end-function
-- **functionCallRegex**: Function call: call function_name args...
-- **functionDefRegex**: Function definition: function name
 
 #### Variables
 - **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}

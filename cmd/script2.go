@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/jeeftor/qmp-controller/internal/args"
 	"github.com/jeeftor/qmp-controller/internal/logging"
-	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/script2"
 	"github.com/spf13/cobra"
 )
@@ -19,6 +19,7 @@ var (
 	scriptTimeout    string   // --timeout 300s
 	debugMode        bool     // --debug (step mode)
 	debugInteractive bool     // --debug-interactive (TUI mode)
+	debugConsole     bool     // --debug-console (force console mode)
 	debugBreakpoints []int    // --breakpoint line1,line2,line3
 )
 
@@ -88,60 +89,29 @@ Examples:
   # Interactive debugging with TUI
   qmp script2 106 login.script --debug-interactive
 
+  # Console debugging (SSH/remote friendly)
+  qmp script2 106 login.script --debug-console
+
   # Set breakpoints on specific lines
   qmp script2 106 login.script --breakpoint 10,25,50 --debug`,
 	Args: cobra.RangeArgs(1, 3),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve parameters using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewScriptArgumentParser()
+		parsedArgs := args.ParseWithHandler(cmdArgs, argParser)
 
-		// Determine parameter layout based on number of arguments
-		var vmid, scriptFile, trainingDataPath string
-
-		if len(args) == 3 {
-			// Traditional format: vmid scriptfile trainingdata
-			vmid = args[0]
-			scriptFile = args[1]
-			trainingDataPath = args[2]
-		} else if len(args) == 2 {
-			// Could be: vmid scriptfile OR scriptfile trainingdata
-			// Try to resolve VM ID from first arg
-			vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
-			if err == nil {
-				// First arg is valid VM ID
-				vmid = vmidInfo.Value
-				scriptFile = args[1]
-				trainingDataPath = resolver.ResolveTrainingData([]string{}, -1) // From env or default
-			} else {
-				// First arg is not VM ID, try environment variable
-				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
-				}
-				vmid = vmidInfo.Value
-				scriptFile = args[0]
-				trainingDataPath = args[1]
-			}
-		} else if len(args) == 1 {
-			// Only script file, VM ID and training data from env vars
-			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			vmid = vmidInfo.Value
-			scriptFile = args[0]
-			trainingDataPath = resolver.ResolveTrainingData([]string{}, -1)
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: Script file is required\n")
-			os.Exit(1)
-		}
+		// Extract parsed values
+		vmid := parsedArgs.VMID
+		scriptFile := parsedArgs.ScriptFile
+		trainingDataPath := parsedArgs.TrainingData
 
 		// Log training data source
 		if trainingDataPath != "" {
 			logging.Info("Using training data", "path", trainingDataPath)
 		}
+
+		// Log argument resolution source for debugging
+		logging.Debug("Arguments parsed", "source", parsedArgs.Source)
 
 		// Create contextual logger
 		logger := logging.NewContextualLogger(vmid, "script2")
@@ -154,15 +124,7 @@ Examples:
 			"env_file", envFile,
 			"timeout", scriptTimeout)
 
-		// Check if script file exists
-		if _, err := os.Stat(scriptFile); os.IsNotExist(err) {
-			logger.Error("Script file not found", "file", scriptFile, "error", err)
-			timer.StopWithError(err, map[string]interface{}{
-				"stage": "file_check",
-			})
-			logging.UserErrorf("Script file '%s' not found", scriptFile)
-			os.Exit(1)
-		}
+		// Script file existence is already validated by the argument parser
 
 		// Read script file
 		scriptContent, err := os.ReadFile(scriptFile)
@@ -250,6 +212,32 @@ Examples:
 			executor.SetParser(parser) // Set parser for validation
 			executor.SetScript(script) // Set script for function access
 
+			// Enable debugging for dry-run if requested
+			if debugMode || debugInteractive || debugConsole || len(debugBreakpoints) > 0 {
+				var debugModeType script2.DebugMode
+				if debugConsole {
+					debugModeType = script2.DebugModeBreakpoints
+					logging.UserInfo("🐛 Dry-run with console debugging - SSH/remote friendly")
+				} else if debugInteractive {
+					debugModeType = script2.DebugModeInteractive
+					logging.UserInfo("🐛 Dry-run with interactive debugging - TUI will appear on breakpoints")
+				} else if debugMode {
+					debugModeType = script2.DebugModeStep
+					logging.UserInfo("🐛 Dry-run with step debugging enabled")
+				} else {
+					debugModeType = script2.DebugModeBreakpoints
+					logging.UserInfo("🐛 Dry-run with breakpoint debugging enabled")
+				}
+
+				debugger := executor.EnableDebugging(debugModeType)
+
+				// Set initial breakpoints
+				for _, lineNum := range debugBreakpoints {
+					debugger.AddBreakpoint(lineNum)
+					logging.UserInfof("🔴 Dry-run breakpoint set on line %d", lineNum)
+				}
+			}
+
 			result, err := executor.Execute(script)
 			if err != nil {
 				logger.Error("Dry run execution failed", "error", err)
@@ -315,11 +303,22 @@ Examples:
 		executor.SetScript(script) // Set script for function access
 
 		// Set up debugging if requested
-		if debugMode || debugInteractive || len(debugBreakpoints) > 0 {
+		if debugMode || debugInteractive || debugConsole || len(debugBreakpoints) > 0 {
 			var debugModeType script2.DebugMode
-			if debugInteractive {
+			if debugConsole {
+				debugModeType = script2.DebugModeBreakpoints // Force console mode
+				logging.UserInfo("🐛 Console debugging enabled - perfect for SSH/remote sessions")
+				logging.UserInfo("   Will break on line 1, <break> directives, and set breakpoints")
+			} else if debugInteractive {
 				debugModeType = script2.DebugModeInteractive
-				logging.UserInfo("🐛 Interactive debugging enabled - TUI will appear on breakpoints")
+				logging.UserInfo("🐛 Interactive debugging enabled - TUI will appear on line 1 and breakpoints")
+				logging.UserInfo("   Use keys: c=continue, s=step, o=OCR view, w=watch progress, q=quit")
+
+				// Check environment for SSH/remote usage
+				if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" {
+					logging.UserInfo("   📡 SSH session detected - TUI will fallback to console mode if needed")
+					logging.UserInfo("   💡 Tip: Use --debug-console for guaranteed SSH compatibility")
+				}
 			} else if debugMode {
 				debugModeType = script2.DebugModeStep
 				logging.UserInfo("🐛 Step debugging enabled - will break on each line")
@@ -673,6 +672,9 @@ func init() {
 
 	script2Cmd.Flags().BoolVar(&debugInteractive, "debug-interactive", false,
 		"Enable interactive TUI debugging mode")
+
+	script2Cmd.Flags().BoolVar(&debugConsole, "debug-console", false,
+		"Enable console debugging mode (SSH/remote friendly)")
 
 	script2Cmd.Flags().IntSliceVar(&debugBreakpoints, "breakpoint", []int{},
 		"Set breakpoints on specific line numbers (comma-separated)")

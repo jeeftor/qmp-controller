@@ -7,9 +7,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jeeftor/qmp-controller/internal/args"
+	"github.com/jeeftor/qmp-controller/internal/constants"
 	"github.com/jeeftor/qmp-controller/internal/logging"
-	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -45,35 +47,20 @@ Examples:
   qmp keyboard send a
   qmp keyboard send enter`,
 	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve VM ID using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewKeyboardArgumentParser()
+		parsedArgs := args.ParseWithHandler(append([]string{"send"}, cmdArgs...), argParser)
 
-		// Check if first arg is VM ID or key
-		var vmid, key string
-		if len(args) == 2 {
-			// Traditional format: vmid key
-			vmid = args[0]
-			key = args[1]
-		} else if len(args) == 1 {
-			// New format with env var: key
-			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1) // No args, use env var
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			vmid = vmidInfo.Value
-			key = args[0]
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: Key is required\n")
-			os.Exit(1)
+		// Extract parsed values
+		vmid := parsedArgs.VMID
+		if len(parsedArgs.RemainingArgs) < 1 {
+			utils.ValidationError(fmt.Errorf("key is required"))
 		}
+		key := parsedArgs.RemainingArgs[0]
 
 		client, err := ConnectToVM(vmid)
-		if err != nil {
-			fmt.Printf("%v\n", err)
-			os.Exit(1)
-		}
+		utils.CheckErrorWithCode(err, "connecting to VM "+vmid, utils.ExitCodeConnection)
 		defer client.Close()
 
 		err = logging.LogOperation("send_key", vmid, func() error {
@@ -106,45 +93,20 @@ Examples:
   export QMP_VM_ID=106
   qmp keyboard type "Hello World"`,
 	Args: cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve VM ID using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewKeyboardArgumentParser()
+		parsedArgs := args.ParseWithHandler(append([]string{"type"}, cmdArgs...), argParser)
 
-		// Check if first arg is VM ID or text
-		var vmid, text string
-		if len(args) >= 2 {
-			// Check if first arg is numeric (VM ID)
-			vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
-			if err == nil {
-				// First arg is valid VM ID
-				vmid = vmidInfo.Value
-				text = strings.Join(args[1:], " ")
-			} else {
-				// First arg is not VM ID, try environment variable
-				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
-				}
-				vmid = vmidInfo.Value
-				text = strings.Join(args, " ")
-			}
-		} else {
-			// Only one arg, must be text with VM ID from env var
-			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			vmid = vmidInfo.Value
-			text = args[0]
+		// Extract parsed values
+		vmid := parsedArgs.VMID
+		if len(parsedArgs.RemainingArgs) < 1 {
+			utils.ValidationError(fmt.Errorf("text to type is required"))
 		}
+		text := strings.Join(parsedArgs.RemainingArgs, " ")
 
 		client, err := ConnectToVM(vmid)
-		if err != nil {
-			fmt.Printf("%v\n", err)
-			os.Exit(1)
-		}
+		utils.CheckErrorWithCode(err, "connecting to VM "+vmid, utils.ExitCodeConnection)
 		defer client.Close()
 
 		// Get the key delay from flag or config
@@ -192,21 +154,16 @@ Examples:
 
 `,
 	Args: cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve VM ID using parameter resolver
-		resolver := params.NewParameterResolver()
-		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		vmid := vmidInfo.Value
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewKeyboardArgumentParser()
+		parsedArgs := args.ParseWithHandler(append([]string{"live"}, cmdArgs...), argParser)
+
+		// Extract parsed values
+		vmid := parsedArgs.VMID
 
 		client, err := ConnectToVM(vmid)
-		if err != nil {
-			fmt.Printf("%v\n", err)
-			os.Exit(1)
-		}
+		utils.CheckErrorWithCode(err, "connecting to VM "+vmid, utils.ExitCodeConnection)
 		defer client.Close()
 
 		// Create the Bubble Tea TUI model
@@ -243,10 +200,7 @@ Examples:
 		jsonStr := args[1]
 
 		client, err := ConnectToVM(vmid)
-		if err != nil {
-			fmt.Printf("%v\n", err)
-			os.Exit(1)
-		}
+		utils.CheckErrorWithCode(err, "connecting to VM "+vmid, utils.ExitCodeConnection)
 		defer client.Close()
 
 		if err := client.SendRawJSON(jsonStr); err != nil {
@@ -321,10 +275,7 @@ Examples:
 		}
 
 		client, err := ConnectToVM(vmid)
-		if err != nil {
-			fmt.Printf("%v\n", err)
-			os.Exit(1)
-		}
+		utils.CheckErrorWithCode(err, "connecting to VM "+vmid, utils.ExitCodeConnection)
 		defer client.Close()
 
 		// Build the F-key name (f1, f2, etc.)
@@ -516,7 +467,7 @@ func getKeyDelay() time.Duration {
 	}
 
 	// Default to 50ms
-	return 50 * time.Millisecond
+	return constants.DefaultKeyDelay
 }
 
 func init() {

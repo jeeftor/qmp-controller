@@ -134,7 +134,7 @@ Script file example:
 		// Set training data path in OCR config
 		if trainingDataPath != "" {
 			scriptOCRConfig.TrainingDataPath = trainingDataPath
-			logging.Info("Using training data", "path", trainingDataPath)
+			logging.Debug("Using training data", "path", trainingDataPath)
 		}
 
 		// Get configuration values early
@@ -521,7 +521,6 @@ func processCommentLine(line, commentPrefix string) (string, bool) {
 	return line, false
 }
 
-
 // performWatchCheck takes a screenshot, runs OCR, and searches for the target string
 func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string, width, height int) (bool, error) {
 	// Take temporary screenshot using centralized helper
@@ -549,7 +548,6 @@ func performWatchCheck(client *qmp.Client, watchString, trainingDataPath string,
 	searchResults := ocr.FindString(result, watchString, searchConfig)
 	return searchResults.Found, nil
 }
-
 
 // scriptSampleCmd shows a sample script with all available features
 var scriptSampleCmd = &cobra.Command{

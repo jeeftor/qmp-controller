@@ -271,7 +271,7 @@ func ProcessScreenshotWithTrainingData(screenshotPath, trainingDataPath string, 
 		trainingData, err = LoadTrainingData(trainingDataPath)
 		if err == nil && trainingData != nil {
 			// If training data exists, use it to recognize characters
-			logging.Info("Using training data for character recognition",
+			logging.Debug("Using training data for character recognition",
 				"path", trainingDataPath,
 				"characterCount", len(trainingData.BitmapMap))
 			if err := RecognizeCharacters(result, trainingData); err != nil {
@@ -384,7 +384,7 @@ func ProcessScreenshotWithCropAndTrainingData(screenshotPath, trainingDataPath s
 		trainingData, err = LoadTrainingData(trainingDataPath)
 		if err == nil && trainingData != nil {
 			// If training data exists, use it to recognize characters
-			logging.Info("Using training data for character recognition", "path", trainingDataPath)
+			logging.Debug("Using training data for character recognition", "path", trainingDataPath)
 			if err := RecognizeCharacters(result, trainingData); err != nil {
 				logging.Warn("Character recognition failed", "error", err)
 			}

@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"fmt"
-	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"image/color"
 	"os"
 	"os/signal"
@@ -11,8 +10,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/jeeftor/qmp-controller/internal/filesystem"
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/jeeftor/qmp-controller/internal/render"
 	"github.com/jeeftor/qmp-controller/internal/styles"
 	"github.com/jeeftor/qmp-controller/internal/training"
@@ -289,15 +291,8 @@ Examples:
 
 		// Create output directory if it doesn't exist
 		if outputTextFile != "" {
-			outputDir := filepath.Dir(outputTextFile)
-			if outputDir != "." {
-				if err := os.MkdirAll(outputDir, 0755); err != nil {
-					logging.Error("Failed to create output directory",
-						"output_dir", outputDir,
-						"output_file", outputTextFile,
-						"error", err)
-					os.Exit(1)
-				}
+			if err := filesystem.EnsureDirectoryForFile(outputTextFile); err != nil {
+				utils.FileSystemError("create output directory", outputTextFile, err)
 			}
 		}
 
@@ -354,8 +349,7 @@ Examples:
 		// Handle interactive training if enabled
 		if ocrConfig.UpdateTraining {
 			if err := handleInteractiveTraining(result, ocrConfig.TrainingDataPath); err != nil {
-				fmt.Fprintf(os.Stderr, "Error during interactive training: %v\n", err)
-				os.Exit(1)
+				utils.FatalError(err, "interactive training failed")
 			}
 
 			// Re-run character recognition with updated training data to refresh the Text output
@@ -383,8 +377,7 @@ Examples:
 		if outputTextFile != "" {
 			// Save to output file
 			if err := os.WriteFile(outputTextFile, []byte(output), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "Error saving OCR results: %v\n", err)
-				os.Exit(1)
+				utils.FileSystemError("save OCR results to", outputTextFile, err)
 			}
 			logging.Info("OCR results saved successfully", "output_file", outputTextFile)
 		} else {
@@ -506,12 +499,8 @@ Examples:
 		outputTextFile := parser.OutputFile
 		if outputTextFile != "" {
 			// Create output directory if it doesn't exist
-			outputDir := filepath.Dir(outputTextFile)
-			if outputDir != "." {
-				if err := os.MkdirAll(outputDir, 0755); err != nil {
-					fmt.Fprintf(os.Stderr, "Error creating output directory: %v\n", err)
-					os.Exit(1)
-				}
+			if err := filesystem.EnsureDirectoryForFile(outputTextFile); err != nil {
+				utils.FileSystemError("create output directory", outputTextFile, err)
 			}
 		}
 
@@ -588,8 +577,7 @@ Examples:
 		// Handle interactive training if enabled
 		if updateTraining {
 			if err := handleInteractiveTraining(result, trainingDataPath); err != nil {
-				fmt.Fprintf(os.Stderr, "Error during interactive training: %v\n", err)
-				os.Exit(1)
+				utils.FatalError(err, "interactive training failed")
 			}
 
 			// Re-run character recognition with updated training data to refresh the Text output
@@ -617,8 +605,7 @@ Examples:
 		if outputTextFile != "" {
 			// Save to output file
 			if err := os.WriteFile(outputTextFile, []byte(output), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "Error saving OCR results: %v\n", err)
-				os.Exit(1)
+				utils.FileSystemError("save OCR results to", outputTextFile, err)
 			}
 			logging.Info("OCR results saved successfully", "output_file", outputTextFile)
 		} else {
@@ -1037,8 +1024,7 @@ var ocrFindVMCmd = &cobra.Command{
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error processing OCR: %v\n", err)
-			os.Exit(2)
+			utils.FatalErrorWithCode(err, "OCR processing failed", utils.ExitCodeGeneral)
 		}
 
 		// Perform search
@@ -1075,8 +1061,7 @@ var ocrFindFileCmd = &cobra.Command{
 
 		result, err := processOCRResult(inputImageFile, trainingDataPath, false)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error processing OCR: %v\n", err)
-			os.Exit(2)
+			utils.FatalErrorWithCode(err, "OCR processing failed", utils.ExitCodeGeneral)
 		}
 
 		// Perform search
@@ -1150,8 +1135,7 @@ var ocrReVMCmd = &cobra.Command{
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error processing OCR: %v\n", err)
-			os.Exit(2)
+			utils.FatalErrorWithCode(err, "OCR processing failed", utils.ExitCodeGeneral)
 		}
 
 		// Perform regex search
@@ -1193,8 +1177,7 @@ var ocrReFileCmd = &cobra.Command{
 
 		result, err := processOCRResult(inputImageFile, trainingDataPath, false)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error processing OCR: %v\n", err)
-			os.Exit(2)
+			utils.FatalErrorWithCode(err, "OCR processing failed", utils.ExitCodeGeneral)
 		}
 
 		// Perform regex search

@@ -2,6 +2,7 @@ package script2
 
 import (
 	"bufio"
+	"crypto/md5"
 	"fmt"
 	"os"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/ocr"
 )
 
 // Simple debug styling
@@ -50,17 +52,46 @@ const (
 	DebugActionListBreakpoints            // List all breakpoints
 )
 
+// WatchOperation represents an active watch operation
+type WatchOperation struct {
+	SearchTerm      string        // Text being searched for
+	Timeout         time.Duration // Maximum time to wait
+	PollInterval    time.Duration // How often to check
+	StartTime       time.Time     // When the operation started
+	Attempts        int           // Number of attempts made
+	IncrementalText []string      // New text found since last check
+	LastScreenHash  string        // Hash of last screen content for incremental updates
+}
+
+// ElapsedTime returns the time elapsed since the operation started
+func (w *WatchOperation) ElapsedTime() time.Duration {
+	return time.Since(w.StartTime)
+}
+
+// WatchHistoryEntry represents a completed watch operation
+type WatchHistoryEntry struct {
+	SearchTerm string
+	Found      bool
+	Duration   time.Duration
+	Attempts   int
+}
+
 // DebugState holds the current debugging state
 type DebugState struct {
-	Mode           DebugMode
-	Breakpoints    map[int]bool      // Line numbers with breakpoints
-	CurrentLine    int               // Current execution line
-	Variables      map[string]string // Current variable state
-	CallStack      []string          // Function call stack
-	StepMode       bool              // True if stepping through execution
-	LastAction     DebugAction       // Last action taken
-	DebugMessages  []string          // Debug messages/output
-	ExecutionPaused bool             // True if execution is paused
+	Mode                   DebugMode
+	Breakpoints            map[int]bool           // Line numbers with breakpoints
+	CurrentLine            int                    // Current execution line
+	Variables              map[string]string      // Current variable state
+	CallStack              []string               // Function call stack
+	StepMode               bool                   // True if stepping through execution
+	LastAction             DebugAction            // Last action taken
+	DebugMessages          []string               // Debug messages/output
+	ExecutionPaused        bool                   // True if execution is paused
+	LastOCRResult          []string               // Last OCR result for preview
+	LastSearchTerm         string                 // Last search term used
+	LastSearchFound        bool                   // Whether last search was successful
+	CurrentWatchOperation  *WatchOperation        // Active watch operation
+	WatchHistory           []WatchHistoryEntry    // History of watch operations
 }
 
 // Debugger handles script debugging functionality
@@ -77,10 +108,13 @@ type Debugger struct {
 func NewDebugger(script *Script, executor *Executor) *Debugger {
 	return &Debugger{
 		state: &DebugState{
-			Mode:        DebugModeNone,
-			Breakpoints: make(map[int]bool),
-			Variables:   make(map[string]string),
-			CallStack:   make([]string, 0),
+			Mode:                  DebugModeNone,
+			Breakpoints:           make(map[int]bool),
+			Variables:             make(map[string]string),
+			CallStack:             make([]string, 0),
+			LastOCRResult:         make([]string, 0),
+			CurrentWatchOperation: nil,
+			WatchHistory:          make([]WatchHistoryEntry, 0),
 		},
 		script:   script,
 		executor: executor,
@@ -120,8 +154,8 @@ func (d *Debugger) ShouldBreak(lineNumber int, line ParsedLine) bool {
 
 	d.state.CurrentLine = lineNumber
 
-	// Always break on explicit <BREAK> directives
-	if line.Type == DirectiveLine && strings.Contains(strings.ToUpper(line.Content), "<BREAK>") {
+	// Always break on explicit <break> directives
+	if line.Type == DirectiveLine && line.Directive != nil && line.Directive.Type == Break {
 		d.logger.Info("Break directive encountered", "line", lineNumber)
 		return true
 	}
@@ -134,6 +168,13 @@ func (d *Debugger) ShouldBreak(lineNumber int, line ParsedLine) bool {
 
 	// Break in step mode
 	if d.state.StepMode {
+		return true
+	}
+
+	// In interactive or breakpoint mode, break at the first line to start debugging session
+	if (d.state.Mode == DebugModeInteractive || d.state.Mode == DebugModeBreakpoints) &&
+	   lineNumber == 1 && !d.state.ExecutionPaused {
+		d.logger.Info("Debugging session starting", "line", lineNumber, "mode", d.debugModeString(d.state.Mode))
 		return true
 	}
 
@@ -166,18 +207,45 @@ func (d *Debugger) handleInteractiveBreak(line ParsedLine) (DebugAction, error) 
 		d.tui = NewDebugTUI(d)
 	}
 
-	// Run the TUI and wait for user action
-	program := tea.NewProgram(d.tui.InitialModel(), tea.WithAltScreen())
-	finalModel, err := program.Run()
+	d.logger.Info("Starting interactive TUI session", "line", d.state.CurrentLine)
+	fmt.Printf("\n🐛 Interactive debugging session starting (line %d)\n", d.state.CurrentLine)
+	fmt.Printf("   Line: %s\n", line.Content)
+	fmt.Printf("   Initializing TUI...\n")
+
+	// Try different TUI configurations for better SSH compatibility
+	var program *tea.Program
+	var finalModel tea.Model
+	var err error
+
+	// First attempt: Standard TUI with alt screen
+	program = tea.NewProgram(d.tui.InitialModel(), tea.WithAltScreen())
+	finalModel, err = program.Run()
+
 	if err != nil {
-		return DebugActionStop, fmt.Errorf("TUI error: %w", err)
+		d.logger.Info("Standard TUI failed, trying without alt screen", "error", err)
+		fmt.Printf("   ⚠️  Standard TUI failed: %v\n", err)
+		fmt.Printf("   🔄 Trying TUI without alt screen for SSH compatibility...\n")
+
+		// Second attempt: TUI without alt screen (better for SSH)
+		program = tea.NewProgram(d.tui.InitialModel())
+		finalModel, err = program.Run()
+
+		if err != nil {
+			d.logger.Error("All TUI attempts failed, falling back to console mode", "error", err)
+			fmt.Printf("   ⚠️  TUI compatibility failed: %v\n", err)
+			fmt.Printf("   📱 Falling back to console debugging mode...\n")
+			// Fallback to console debugging
+			return d.handleConsoleBreak(line)
+		}
 	}
 
 	// Extract the action from the final model
 	if model, ok := finalModel.(*debugTUIModel); ok {
+		d.logger.Info("TUI session completed", "action", model.lastAction)
 		return model.lastAction, nil
 	}
 
+	d.logger.Warn("Unexpected TUI model type, continuing execution")
 	return DebugActionContinue, nil
 }
 
@@ -388,4 +456,137 @@ func (d *Debugger) GetState() *DebugState {
 // GetScript returns the script being debugged (for TUI)
 func (d *Debugger) GetScript() *Script {
 	return d.script
+}
+
+// UpdateOCRResult updates the debug state with new OCR results
+func (d *Debugger) UpdateOCRResult(result *ocr.OCRResult, searchTerm string, found bool) {
+	if d.state == nil {
+		return
+	}
+
+	d.state.LastOCRResult = result.Text
+	d.state.LastSearchTerm = searchTerm
+	d.state.LastSearchFound = found
+}
+
+// StartWatchOperation begins tracking a new watch operation
+func (d *Debugger) StartWatchOperation(searchTerm string, timeout, pollInterval time.Duration) {
+	if d.state == nil {
+		return
+	}
+
+	d.state.CurrentWatchOperation = &WatchOperation{
+		SearchTerm:      searchTerm,
+		Timeout:         timeout,
+		PollInterval:    pollInterval,
+		StartTime:       time.Now(),
+		Attempts:        0,
+		IncrementalText: make([]string, 0),
+	}
+}
+
+// UpdateWatchOperation updates the current watch operation with new attempt data
+func (d *Debugger) UpdateWatchOperation(ocrResult *ocr.OCRResult) {
+	if d.state == nil || d.state.CurrentWatchOperation == nil {
+		return
+	}
+
+	op := d.state.CurrentWatchOperation
+	op.Attempts++
+
+	// Calculate hash of current screen content for incremental updates
+	currentText := strings.Join(ocrResult.Text, "\n")
+	currentHash := fmt.Sprintf("%x", md5.Sum([]byte(currentText)))
+
+	// If this is the first check or screen has changed, update incremental text
+	if op.LastScreenHash == "" || op.LastScreenHash != currentHash {
+		// For now, just store the new lines (could be optimized to show only differences)
+		op.IncrementalText = ocrResult.Text
+		op.LastScreenHash = currentHash
+	}
+}
+
+// CompleteWatchOperation finishes the current watch operation and adds it to history
+func (d *Debugger) CompleteWatchOperation(found bool) {
+	if d.state == nil || d.state.CurrentWatchOperation == nil {
+		return
+	}
+
+	op := d.state.CurrentWatchOperation
+
+	// Add to history
+	entry := WatchHistoryEntry{
+		SearchTerm: op.SearchTerm,
+		Found:      found,
+		Duration:   op.ElapsedTime(),
+		Attempts:   op.Attempts,
+	}
+
+	// Prepend to history (most recent first) and limit to 20 entries
+	d.state.WatchHistory = append([]WatchHistoryEntry{entry}, d.state.WatchHistory...)
+	if len(d.state.WatchHistory) > 20 {
+		d.state.WatchHistory = d.state.WatchHistory[:20]
+	}
+
+	// Clear current operation
+	d.state.CurrentWatchOperation = nil
+}
+
+// RefreshOCR forces a new OCR capture for the debug TUI
+func (d *Debugger) RefreshOCR() error {
+	if d.executor == nil {
+		return fmt.Errorf("no executor available for OCR refresh")
+	}
+
+	// Handle dry-run mode with mock OCR data
+	if d.executor.context.DryRun {
+		d.logger.Info("Mock OCR refresh for dry-run mode")
+		mockResult := &ocr.OCRResult{
+			Text: []string{
+				"[DRY-RUN] Mock console output",
+				"user@server:~$ echo 'hello world'",
+				"hello world",
+				"user@server:~$ ls -la",
+				"total 12",
+				"drwxr-xr-x 2 user user 4096 Jan 01 12:00 .",
+				"drwxr-xr-x 3 user user 4096 Jan 01 12:00 ..",
+				"-rw-r--r-- 1 user user  220 Jan 01 12:00 .bashrc",
+				"user@server:~$ ",
+			},
+		}
+		d.UpdateOCRResult(mockResult, "", false)
+		return nil
+	}
+
+	if d.executor.context.Client == nil {
+		return fmt.Errorf("no client available for OCR refresh")
+	}
+
+	// Take temporary screenshot
+	tempFile, err := TakeTemporaryScreenshot(d.executor.context.Client, "debug-ocr-refresh")
+	if err != nil {
+		return fmt.Errorf("failed to take screenshot: %w", err)
+	}
+	defer func() {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+	}()
+
+	// Use training data from context
+	trainingDataPath := d.executor.context.TrainingData
+	if trainingDataPath == "" {
+		// Get default training data path
+		trainingDataPath = "/Users/jstein/.qmp_training_data.json" // TODO: Use proper default
+	}
+
+	// Process with OCR
+	result, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, 160, 50)
+	if err != nil {
+		return fmt.Errorf("OCR processing failed: %w", err)
+	}
+
+	// Update debug state
+	d.UpdateOCRResult(result, "", false)
+
+	return nil
 }

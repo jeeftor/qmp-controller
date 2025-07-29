@@ -142,6 +142,26 @@ func (e *Executor) executeDryRun(script *Script, result *ExecutionResult, startT
 		if line.Type != EmptyLine && line.Type != CommentLine {
 			result.LinesExecuted++
 
+			// Check for debugging breakpoint in dry-run mode
+			if e.debugger != nil && e.debugger.ShouldBreak(line.LineNumber, line) {
+				action, err := e.debugger.HandleBreak(line.LineNumber, line)
+				if err != nil {
+					result.Success = false
+					result.Error = fmt.Sprintf("debugger error at line %d: %s", line.LineNumber, err.Error())
+					break
+				}
+
+				// Handle debug actions
+				switch action {
+				case DebugActionStop:
+					result.Success = false
+					result.Error = "execution stopped by debugger"
+					break
+				case DebugActionContinue, DebugActionStep, DebugActionStepOver:
+					// Continue with dry-run execution
+				}
+			}
+
 			// Provide detailed dry-run feedback for complex directives
 			if line.Type == DirectiveLine && line.Directive != nil {
 				e.simulateDirectiveExecution(line.Directive, logger)
@@ -353,80 +373,56 @@ func (e *Executor) executeKeySequence(directive *Directive, logger *logging.Cont
 	return nil
 }
 
-// executeWatch waits for text to appear on screen using OCR
+// executeWatch waits for text to appear on screen using OCR with incremental processing
 func (e *Executor) executeWatch(directive *Directive, logger *logging.ContextualLogger) error {
 	searchText := directive.SearchText
 	timeout := directive.Timeout
+	pollInterval := 500 * time.Millisecond
 
 	logger.Info("Watching for text", "text", searchText, "timeout", timeout)
 
-	// Take screenshot and perform OCR search
+	// Start tracking watch operation in debugger if enabled
+	if e.debugger != nil && e.debugger.IsEnabled() {
+		e.debugger.StartWatchOperation(searchText, timeout, pollInterval)
+	}
+
+	// Use shared incremental OCR search function
 	startTime := time.Now()
 	found := false
 
 	for time.Since(startTime) < timeout && !found {
-		// Take temporary screenshot
-		tempFile, err := TakeTemporaryScreenshot(e.context.Client, "script2-watch")
+		// Use the shared incremental OCR search function (DRY principle)
+		searchFound, err := e.performIncrementalOCRSearch(searchText, "watch", logger)
 		if err != nil {
-			logger.Warn("Failed to take screenshot for watch", "error", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		defer func() {
-			tempFile.Close()
-			os.Remove(tempFile.Name())
-		}()
-
-		// Perform OCR on the screenshot
-		// Use training data from context, fall back to default if not provided
-		trainingDataPath := e.context.TrainingData
-		if trainingDataPath == "" {
-			trainingDataPath = qmp.GetDefaultTrainingDataPath()
-			logger.Info("Using default training data location", "path", trainingDataPath)
-			// Also show user-visible message
-			logging.UserInfof("📂 Using default training data: %s", trainingDataPath)
-		}
-		width := 160 // TODO: Make configurable from context
-		height := 50 // TODO: Make configurable from context
-
-		// Process the screenshot with OCR
-		results, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, width, height)
-		if err != nil {
-			logger.Warn("OCR processing failed", "error", err)
-			time.Sleep(1 * time.Second)
+			logger.Warn("Incremental OCR search failed in watch", "error", err)
+			time.Sleep(pollInterval)
 			continue
 		}
 
-		// Log differences if we have previous OCR results
-		if e.lastOCRText != nil && len(e.lastOCRText) > 0 {
-			// Find new or changed lines
-			diffLines := findDifferentLines(e.lastOCRText, results.Text)
-			if len(diffLines) > 0 {
-				logger.Debug("Watch text differences detected", "diff_count", len(diffLines))
-				// Log each different line
-				diffText := strings.Join(diffLines, "\n  ")
-				logger.Debug(fmt.Sprintf("Watch text difference:\n  %s", diffText))
-			}
-		}
+		found = searchFound
 
-		// Store current OCR results for next comparison
-		e.lastOCRText = results.Text
-
-		// Search for the target text by joining all lines
-		screenText := strings.Join(results.Text, "\n")
-		if strings.Contains(screenText, searchText) {
-			found = true
+		if found {
 			logger.Info("Watch condition satisfied",
 				"text", searchText,
 				"elapsed", time.Since(startTime))
+
+			// Complete watch operation in debugger
+			if e.debugger != nil && e.debugger.IsEnabled() {
+				e.debugger.CompleteWatchOperation(true)
+			}
 			break
 		}
 
 		// Brief pause before next attempt
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 
 	if !found {
+		// Complete watch operation in debugger with failure
+		if e.debugger != nil && e.debugger.IsEnabled() {
+			e.debugger.CompleteWatchOperation(false)
+		}
+
 		return fmt.Errorf("watch timeout: text '%s' not found within %v", searchText, timeout)
 	}
 
@@ -653,12 +649,13 @@ func (e *Executor) executeConditionalBlock(block []ParsedLine, logger *logging.C
 	return nil
 }
 
-// performOCRSearch performs OCR on current screen and searches for text
-func (e *Executor) performOCRSearch(searchText string, logger *logging.ContextualLogger) (bool, error) {
+// performIncrementalOCRSearch performs OCR with incremental processing for optimal performance
+// This is the shared function that implements DRY principles for OCR search across all commands
+func (e *Executor) performIncrementalOCRSearch(searchText string, operationType string, logger *logging.ContextualLogger) (bool, error) {
 	// Take temporary screenshot
-	tempFile, err := TakeTemporaryScreenshot(e.context.Client, "script2-conditional")
+	tempFile, err := TakeTemporaryScreenshot(e.context.Client, fmt.Sprintf("script2-%s", operationType))
 	if err != nil {
-		return false, fmt.Errorf("failed to take screenshot for conditional: %w", err)
+		return false, fmt.Errorf("failed to take screenshot for %s: %w", operationType, err)
 	}
 	defer func() {
 		tempFile.Close()
@@ -669,7 +666,7 @@ func (e *Executor) performOCRSearch(searchText string, logger *logging.Contextua
 	trainingDataPath := e.context.TrainingData
 	if trainingDataPath == "" {
 		trainingDataPath = qmp.GetDefaultTrainingDataPath()
-		logger.Debug("Using default training data for conditional", "path", trainingDataPath)
+		logger.Debug("Using default training data", "operation", operationType, "path", trainingDataPath)
 	}
 
 	width := 160 // TODO: Make configurable from context
@@ -678,19 +675,68 @@ func (e *Executor) performOCRSearch(searchText string, logger *logging.Contextua
 	// Process the screenshot with OCR
 	results, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, width, height)
 	if err != nil {
-		return false, fmt.Errorf("OCR processing failed for conditional: %w", err)
+		return false, fmt.Errorf("OCR processing failed for %s: %w", operationType, err)
 	}
 
-	// Search for the target text by joining all lines
-	screenText := strings.Join(results.Text, "\n")
-	found := strings.Contains(screenText, searchText)
+	// Update debugger with OCR results and watch progress
+	if e.debugger != nil && e.debugger.IsEnabled() {
+		e.debugger.UpdateWatchOperation(results)
+	}
 
-	logger.Debug("OCR search completed for conditional",
+	found := false
+
+	// INCREMENTAL PROCESSING: Check new lines first for performance optimization
+	if e.lastOCRText != nil && len(e.lastOCRText) > 0 {
+		// Find new or changed lines (incremental processing optimization)
+		diffLines := findDifferentLines(e.lastOCRText, results.Text)
+		if len(diffLines) > 0 {
+			logger.Debug("OCR differences detected for incremental search", "operation", operationType, "diff_count", len(diffLines))
+
+			// Search in new lines first (performance optimization)
+			newText := strings.Join(diffLines, "\n")
+			if strings.Contains(newText, searchText) {
+				found = true
+				logger.Debug("Search text found in new content (incremental)", "operation", operationType, "text", searchText)
+			}
+		}
+	}
+
+	// Store current OCR results for next comparison (always update for incremental processing)
+	e.lastOCRText = results.Text
+
+	// FALLBACK: If not found in incremental content, search full screen
+	if !found {
+		screenText := strings.Join(results.Text, "\n")
+		found = strings.Contains(screenText, searchText)
+		if found {
+			logger.Debug("Search text found in full screen (fallback)", "operation", operationType, "text", searchText)
+		}
+	}
+
+	// Update debugger with final search result
+	if e.debugger != nil && e.debugger.IsEnabled() {
+		e.debugger.UpdateOCRResult(results, searchText, found)
+
+		// Update watch operation if one is active
+		if e.debugger.state.CurrentWatchOperation != nil {
+			e.debugger.UpdateWatchOperation(results)
+		}
+	}
+
+	logger.Debug("Incremental OCR search completed",
+		"operation", operationType,
 		"search_text", searchText,
 		"found", found,
-		"screen_lines", len(results.Text))
+		"screen_lines", len(results.Text),
+		"used_incremental", e.lastOCRText != nil)
 
 	return found, nil
+}
+
+// performOCRSearch performs OCR on current screen and searches for text (legacy wrapper for compatibility)
+// This function now uses the shared incremental OCR search implementation
+func (e *Executor) performOCRSearch(searchText string, logger *logging.ContextualLogger) (bool, error) {
+	return e.performIncrementalOCRSearch(searchText, "conditional", logger)
 }
 
 // executeConditionalLine executes conditional logic
@@ -858,7 +904,7 @@ func (e *Executor) executeRepeat(directive *Directive, logger *logging.Contextua
 	return nil
 }
 
-// executeWhileFound executes a block while text is found on screen
+// executeWhileFound executes a block while text is found on screen with incremental OCR processing
 func (e *Executor) executeWhileFound(directive *Directive, logger *logging.ContextualLogger) error {
 	searchText := directive.SearchText
 	timeout := directive.Timeout
@@ -877,10 +923,10 @@ func (e *Executor) executeWhileFound(directive *Directive, logger *logging.Conte
 	for time.Since(startTime) < timeout {
 		iteration++
 
-		// Check if text is found on screen
-		found, err := e.performOCRSearch(searchText, logger)
+		// Check if text is found on screen using incremental OCR search (DRY principle)
+		found, err := e.performIncrementalOCRSearch(searchText, "while-found", logger)
 		if err != nil {
-			logger.Warn("OCR search failed in while-found", "iteration", iteration, "error", err)
+			logger.Warn("Incremental OCR search failed in while-found", "iteration", iteration, "error", err)
 			time.Sleep(pollInterval)
 			continue
 		}
@@ -906,7 +952,7 @@ func (e *Executor) executeWhileFound(directive *Directive, logger *logging.Conte
 	return fmt.Errorf("while-found loop timed out after %v (text '%s' still found)", timeout, searchText)
 }
 
-// executeWhileNotFound executes a block while text is not found on screen
+// executeWhileNotFound executes a block while text is not found on screen with incremental OCR processing
 func (e *Executor) executeWhileNotFound(directive *Directive, logger *logging.ContextualLogger) error {
 	searchText := directive.SearchText
 	timeout := directive.Timeout
@@ -925,10 +971,10 @@ func (e *Executor) executeWhileNotFound(directive *Directive, logger *logging.Co
 	for time.Since(startTime) < timeout {
 		iteration++
 
-		// Check if text is found on screen
-		found, err := e.performOCRSearch(searchText, logger)
+		// Check if text is found on screen using incremental OCR search (DRY principle)
+		found, err := e.performIncrementalOCRSearch(searchText, "while-not-found", logger)
 		if err != nil {
-			logger.Warn("OCR search failed in while-not-found", "iteration", iteration, "error", err)
+			logger.Warn("Incremental OCR search failed in while-not-found", "iteration", iteration, "error", err)
 			time.Sleep(pollInterval)
 			continue
 		}
@@ -1299,11 +1345,13 @@ func TakeTemporaryScreenshot(client *qmp.Client, prefix string) (*os.File, error
 func (e *Executor) executeBreak(directive *Directive, logger *logging.ContextualLogger) error {
 	logger.Info("Break directive encountered")
 
-	// Check if we're in a debugging context
+	// When debugging is enabled, <break> directives are handled by the debugger
+	// in the main execution loop (ShouldBreak/HandleBreak), so we just continue normally
 	if e.debugger != nil && e.debugger.IsEnabled() {
-		logger.Info("Break directive encountered - triggering debugger")
-		// Should be handled by the debugger in the main execution loop
-		return fmt.Errorf("break directive not handled by debugger")
+		logger.Info("Break directive - debugger is handling this")
+		// The debugger will have already handled this via ShouldBreak() before we get here
+		// Just continue execution normally
+		return nil
 	}
 
 	// For loops and switch statements, return a special error to break out

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -71,6 +72,8 @@ const (
 	viewVariables
 	viewBreakpoints
 	viewHelp
+	viewOCR
+	viewWatchProgress
 )
 
 // debugKeyMap defines keyboard shortcuts for debugging
@@ -82,6 +85,9 @@ type debugKeyMap struct {
 	Screenshot  key.Binding
 	Variables   key.Binding
 	Breakpoints key.Binding
+	OCRView     key.Binding
+	WatchView   key.Binding
+	Refresh     key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 	Enter       key.Binding
@@ -120,6 +126,18 @@ func DefaultDebugKeyMap() debugKeyMap {
 		Breakpoints: key.NewBinding(
 			key.WithKeys("b"),
 			key.WithHelp("b", "breakpoints"),
+		),
+		OCRView: key.NewBinding(
+			key.WithKeys("o"),
+			key.WithHelp("o", "OCR view"),
+		),
+		WatchView: key.NewBinding(
+			key.WithKeys("w"),
+			key.WithHelp("w", "watch progress"),
+		),
+		Refresh: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "refresh OCR"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?", "h"),
@@ -239,6 +257,24 @@ func (m *debugTUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = viewBreakpoints
 		m.updateViewportContent()
 
+	case key.Matches(msg, m.keys.OCRView):
+		m.currentView = viewOCR
+		m.updateViewportContent()
+
+	case key.Matches(msg, m.keys.WatchView):
+		m.currentView = viewWatchProgress
+		m.updateViewportContent()
+
+	case key.Matches(msg, m.keys.Refresh):
+		// Refresh OCR view with new screenshot
+		if m.currentView == viewOCR {
+			err := m.debugger.RefreshOCR()
+			if err != nil {
+				// Could show error message in the view
+			}
+			m.updateViewportContent()
+		}
+
 	case key.Matches(msg, m.keys.Help):
 		m.helpVisible = !m.helpVisible
 		m.updateViewportContent()
@@ -257,6 +293,14 @@ func (m *debugTUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case msg.String() == "3":
 		m.currentView = viewBreakpoints
+		m.updateViewportContent()
+
+	case msg.String() == "4":
+		m.currentView = viewOCR
+		m.updateViewportContent()
+
+	case msg.String() == "5":
+		m.currentView = viewWatchProgress
 		m.updateViewportContent()
 
 	case msg.String() == ":":
@@ -337,6 +381,10 @@ func (m *debugTUIModel) updateViewportContent() {
 		m.viewport.SetContent(m.renderVariablesView())
 	case viewBreakpoints:
 		m.viewport.SetContent(m.renderBreakpointsView())
+	case viewOCR:
+		m.viewport.SetContent(m.renderOCRView())
+	case viewWatchProgress:
+		m.viewport.SetContent(m.renderWatchProgressView())
 	case viewHelp:
 		m.viewport.SetContent(m.renderHelpView())
 	}
@@ -453,8 +501,13 @@ func (m *debugTUIModel) renderHelpView() string {
 	content.WriteString("  1       - Script view\n")
 	content.WriteString("  2       - Variables view\n")
 	content.WriteString("  3       - Breakpoints view\n")
+	content.WriteString("  4       - OCR preview view\n")
+	content.WriteString("  5       - Watch progress view\n")
 	content.WriteString("  v       - Toggle variables view\n")
-	content.WriteString("  b       - Toggle breakpoints view\n\n")
+	content.WriteString("  b       - Toggle breakpoints view\n")
+	content.WriteString("  o       - Toggle OCR view\n")
+	content.WriteString("  w       - Toggle watch progress view\n")
+	content.WriteString("  r       - Refresh OCR (when in OCR view)\n\n")
 
 	content.WriteString(sectionStyle.Render("Commands:") + "\n")
 	content.WriteString("  :       - Enter command mode\n")
@@ -503,7 +556,7 @@ func (m *debugTUIModel) View() string {
 	}
 
 	// Footer with key hints
-	footer := "c:continue s:step n:next q:quit v:vars b:breaks ?:help :cmd"
+	footer := "c:continue s:step n:next q:quit v:vars b:breaks o:ocr w:watch r:refresh ?:help :cmd"
 	footerBar := footerStyle.Copy().
 		Width(m.width).
 		Align(lipgloss.Center).
@@ -511,6 +564,127 @@ func (m *debugTUIModel) View() string {
 	content.WriteString(footerBar)
 
 	return content.String()
+}
+
+// renderOCRView renders the OCR preview view
+func (m *debugTUIModel) renderOCRView() string {
+	var content strings.Builder
+	state := m.debugger.GetState()
+
+	content.WriteString(headerStyle.Render("👁️  OCR PREVIEW") + "\n\n")
+
+	// Check if we have current OCR data
+	if len(state.LastOCRResult) == 0 {
+		content.WriteString(mutedStyle.Render("No OCR data available") + "\n")
+		content.WriteString(mutedStyle.Render("Press 'r' to refresh with current screen") + "\n")
+		return content.String()
+	}
+
+	// Display OCR text with line numbers
+	for i, line := range state.LastOCRResult {
+		lineNum := fmt.Sprintf("%2d", i+1)
+		content.WriteString(fmt.Sprintf("%s │ %s\n",
+			lineNumStyle.Render(lineNum),
+			textStyle.Render(line)))
+	}
+
+	// Show search highlights if there's an active search
+	if state.LastSearchTerm != "" {
+		content.WriteString("\n" + sectionStyle.Render("🔍 LAST SEARCH") + "\n")
+		content.WriteString(fmt.Sprintf("Term: %s\n", variableStyle.Render(state.LastSearchTerm)))
+		content.WriteString(fmt.Sprintf("Found: %s\n",
+			func() string {
+				if state.LastSearchFound {
+					return successStyle.Render("YES")
+				}
+				return errorStyle.Render("NO")
+			}()))
+	}
+
+	content.WriteString("\n" + mutedStyle.Render("Press 'r' to refresh OCR") + "\n")
+
+	return content.String()
+}
+
+// renderWatchProgressView renders the watch command progress view
+func (m *debugTUIModel) renderWatchProgressView() string {
+	var content strings.Builder
+	state := m.debugger.GetState()
+
+	content.WriteString(headerStyle.Render("⏱️  WATCH PROGRESS") + "\n\n")
+
+	// Show current watch operation if active
+	if state.CurrentWatchOperation != nil {
+		op := state.CurrentWatchOperation
+		content.WriteString(sectionStyle.Render("🔄 ACTIVE WATCH") + "\n")
+		content.WriteString(fmt.Sprintf("Searching for: %s\n", variableStyle.Render(op.SearchTerm)))
+		content.WriteString(fmt.Sprintf("Timeout: %s\n", valueStyle.Render(op.Timeout.String())))
+		content.WriteString(fmt.Sprintf("Poll interval: %s\n", valueStyle.Render(op.PollInterval.String())))
+		content.WriteString(fmt.Sprintf("Attempts: %s\n", valueStyle.Render(fmt.Sprintf("%d", op.Attempts))))
+
+		elapsed := op.ElapsedTime()
+		remaining := op.Timeout - elapsed
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		content.WriteString(fmt.Sprintf("Elapsed: %s\n", valueStyle.Render(elapsed.Truncate(time.Millisecond).String())))
+		content.WriteString(fmt.Sprintf("Remaining: %s\n", valueStyle.Render(remaining.Truncate(time.Millisecond).String())))
+
+		// Progress bar
+		progress := float64(elapsed) / float64(op.Timeout)
+		if progress > 1.0 {
+			progress = 1.0
+		}
+		progressBar := m.renderProgressBar(progress, 40)
+		content.WriteString(fmt.Sprintf("Progress: %s\n", progressBar))
+
+		// Show incremental text updates if available
+		if len(op.IncrementalText) > 0 {
+			content.WriteString("\n" + sectionStyle.Render("📝 NEW CONSOLE TEXT") + "\n")
+			for _, line := range op.IncrementalText {
+				content.WriteString(textStyle.Render(line) + "\n")
+			}
+		}
+	} else {
+		content.WriteString(mutedStyle.Render("No active watch operation") + "\n")
+	}
+
+	// Show watch history
+	if len(state.WatchHistory) > 0 {
+		content.WriteString("\n" + sectionStyle.Render("📜 WATCH HISTORY") + "\n")
+		for i, entry := range state.WatchHistory {
+			if i >= 10 { // Limit to last 10 entries
+				break
+			}
+			status := errorStyle.Render("TIMEOUT")
+			if entry.Found {
+				status = successStyle.Render("FOUND")
+			}
+			content.WriteString(fmt.Sprintf("%s: %s (%s, %d attempts)\n",
+				status,
+				variableStyle.Render(entry.SearchTerm),
+				valueStyle.Render(entry.Duration.Truncate(time.Millisecond).String()),
+				entry.Attempts))
+		}
+	}
+
+	return content.String()
+}
+
+// renderProgressBar renders a simple progress bar
+func (m *debugTUIModel) renderProgressBar(progress float64, width int) string {
+	filled := int(progress * float64(width))
+	if filled > width {
+		filled = width
+	}
+
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	percentage := fmt.Sprintf("%.1f%%", progress*100)
+
+	return fmt.Sprintf("[%s] %s",
+		successStyle.Render(bar),
+		mutedStyle.Render(percentage))
 }
 
 // currentViewString returns the current view as a string
@@ -522,6 +696,10 @@ func (m *debugTUIModel) currentViewString() string {
 		return "Variables"
 	case viewBreakpoints:
 		return "Breakpoints"
+	case viewOCR:
+		return "OCR Preview"
+	case viewWatchProgress:
+		return "Watch Progress"
 	case viewHelp:
 		return "Help"
 	default:

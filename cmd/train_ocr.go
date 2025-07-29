@@ -3,17 +3,18 @@ package cmd
 import (
 	"bufio"
 	"fmt"
-	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
+	"github.com/jeeftor/qmp-controller/internal/args"
+	"github.com/jeeftor/qmp-controller/internal/constants"
+	"github.com/jeeftor/qmp-controller/internal/filesystem"
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/ocr"
-	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/render"
 	"github.com/jeeftor/qmp-controller/internal/training"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -66,38 +67,24 @@ Examples:
   # Update existing training data
   qmp train-ocr vm 106 training-data.json --update`,
 	Args: cobra.RangeArgs(0, 2),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve parameters using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using simple argument parser for training
+		argParser := args.NewSimpleArgumentParser("train-ocr vm")
+		parsedArgs := args.ParseWithHandler(cmdArgs, argParser)
 
-		// Resolve VM ID
-		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		vmid := vmidInfo.Value
+		// Extract VM ID
+		vmid := parsedArgs.VMID
 
-		// Resolve output file
+		// For training output file, check remaining args or environment
 		var outputFile string
-		if len(args) >= 2 {
-			outputFile = args[1]
-		} else if len(args) == 1 && vmidInfo.Source == "argument" {
-			// Only VM ID provided as argument, check for output file in env
-			outputFileInfo := resolver.ResolveOutputFileWithInfo([]string{}, -1)
-			if outputFileInfo.Value == "" {
-				fmt.Fprintf(os.Stderr, "Error: Output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable\n")
-				os.Exit(1)
-			}
-			outputFile = outputFileInfo.Value
+		if len(parsedArgs.RemainingArgs) > 0 {
+			outputFile = parsedArgs.RemainingArgs[0]
 		} else {
-			// No arguments, both from env vars
-			outputFileInfo := resolver.ResolveOutputFileWithInfo([]string{}, -1)
-			if outputFileInfo.Value == "" {
-				fmt.Fprintf(os.Stderr, "Error: Output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable\n")
-				os.Exit(1)
+			// Try environment variable QMP_OUTPUT_FILE
+			outputFile = os.Getenv("QMP_OUTPUT_FILE")
+			if outputFile == "" {
+				utils.ValidationError(fmt.Errorf("output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable"))
 			}
-			outputFile = outputFileInfo.Value
 		}
 
 		runTrainingFlow(vmid, outputFile, true)
@@ -128,9 +115,9 @@ Examples:
   # Update existing training data
   qmp train-ocr file training-image.ppm training-data.json --update`,
 	Args: cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		inputFile := args[0]
-		outputFile := args[1]
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		inputFile := cmdArgs[0]
+		outputFile := cmdArgs[1]
 
 		runTrainingFlow(inputFile, outputFile, false)
 	},
@@ -139,16 +126,15 @@ Examples:
 func runTrainingFlow(input, outputFile string, isVM bool) {
 	// Set default dimensions if not provided
 	if trainColumns <= 0 {
-		trainColumns = qmp.DEFAULT_WIDTH
+		trainColumns = constants.DefaultScreenWidth
 	}
 	if trainRows <= 0 {
-		trainRows = qmp.DEFAULT_HEIGHT
+		trainRows = constants.DefaultScreenHeight
 	}
 
-	// Validate dimensions
-	if trainColumns <= 0 || trainRows <= 0 {
-		fmt.Println("Error: Columns and rows must be positive integers")
-		os.Exit(1)
+	// Validate dimensions using centralized validation
+	if err := constants.ValidateScreenDimensions(trainColumns, trainRows); err != nil {
+		utils.ValidationError(err)
 	}
 
 	// Determine the screenshot file path
@@ -160,16 +146,14 @@ func runTrainingFlow(input, outputFile string, isVM bool) {
 		vmid := input
 		client, err := ConnectToVM(vmid)
 		if err != nil {
-			logging.Error("Failed to connect to VM for training", "vmid", vmid, "error", err)
-			os.Exit(1)
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
 
 		// Take temporary screenshot
 		tempFile, err = TakeTemporaryScreenshot(client, "qmp-train-ocr")
 		if err != nil {
-			logging.Error("Failed to take screenshot for training", "vmid", vmid, "error", err)
-			os.Exit(1)
+			utils.FatalError(err, "taking screenshot for training")
 		}
 		defer os.Remove(tempFile.Name())
 		defer tempFile.Close()
@@ -179,35 +163,22 @@ func runTrainingFlow(input, outputFile string, isVM bool) {
 	} else {
 		// File mode - check if input file exists
 		inputFile = input
-		if _, err := os.Stat(inputFile); os.IsNotExist(err) {
-			logging.Error("Input file does not exist", "input_file", inputFile)
-			os.Exit(1)
-		}
+		filesystem.CheckFileExistsWithError(inputFile, "validating input file")
 	}
 
 	// Create output directory if it doesn't exist
-	outputDir := filepath.Dir(outputFile)
-	if outputDir != "." {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			logging.Error("Failed to create training data output directory",
-				"output_dir", outputDir,
-				"output_file", outputFile,
-				"error", err)
-			os.Exit(1)
-		}
+	if err := filesystem.EnsureDirectoryForFile(outputFile); err != nil {
+		utils.FileSystemError("create training data directory", outputFile, err)
 	}
 
 	// Load existing training data if update flag is set and file exists
 	var trainingData *ocr.TrainingData
 	var err error
 
-	if updateExisting && fileExists(outputFile) {
+	if updateExisting && (filesystem.CheckFileExists(outputFile) == nil) {
 		trainingData, err = ocr.LoadTrainingData(outputFile)
 		if err != nil {
-			logging.Error("Failed to load existing training data",
-				"training_data_file", outputFile,
-				"error", err)
-			os.Exit(1)
+			utils.FatalError(err, "loading existing training data")
 		}
 		logging.Info("Loaded existing training data",
 			"training_data_file", outputFile,
@@ -229,12 +200,7 @@ func runTrainingFlow(input, outputFile string, isVM bool) {
 	// Process the file to extract character bitmaps
 	result, err := ocr.ProcessScreenshot(inputFile, trainColumns, trainRows)
 	if err != nil {
-		logging.Error("Failed to process file for OCR training",
-			"input_file", inputFile,
-			"columns", trainColumns,
-			"rows", trainRows,
-			"error", err)
-		os.Exit(1)
+		utils.FatalError(err, "processing file for OCR training")
 	}
 
 	// Try to recognize characters using existing training data
@@ -369,8 +335,7 @@ func runTrainingFlow(input, outputFile string, isVM bool) {
 
 	// Save training data to the specified output file
 	if err := ocr.SaveTrainingData(trainingData, outputFile); err != nil {
-		fmt.Printf("Error saving training data: %v\n", err)
-		os.Exit(1)
+		utils.FatalError(err, "saving training data")
 	}
 
 	fmt.Printf("Training data saved to %s\n", outputFile)
@@ -384,14 +349,8 @@ func init() {
 
 	// Add resolution flags to both subcommands
 	for _, cmd := range []*cobra.Command{trainOcrVmCmd, trainOcrFileCmd} {
-		cmd.Flags().IntVarP(&trainColumns, "columns", "c", qmp.DEFAULT_WIDTH, "Number of columns in the terminal")
-		cmd.Flags().IntVarP(&trainRows, "rows", "r", qmp.DEFAULT_HEIGHT, "Number of rows in the terminal")
+		cmd.Flags().IntVarP(&trainColumns, "columns", "c", constants.DefaultScreenWidth, "Number of columns in the terminal")
+		cmd.Flags().IntVarP(&trainRows, "rows", "r", constants.DefaultScreenHeight, "Number of rows in the terminal")
 		cmd.Flags().BoolVar(&updateExisting, "update", false, "Update existing training data if the file exists")
 	}
-}
-
-// Helper function to check if a file exists
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return !os.IsNotExist(err)
 }

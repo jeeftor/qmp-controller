@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jeeftor/qmp-controller/internal/args"
+	"github.com/jeeftor/qmp-controller/internal/filesystem"
 	"github.com/jeeftor/qmp-controller/internal/logging"
-	"github.com/jeeftor/qmp-controller/internal/params"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -47,32 +49,28 @@ Examples:
   # Take a screenshot with SSH tunneling
   qmp screenshot 106 screenshot.png --socket /tmp/qmp-106.sock --remote-temp /tmp/qmp-screenshot.ppm`,
 	Args: cobra.RangeArgs(0, 2),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve parameters using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the simple argument parser
+		argParser := args.NewSimpleArgumentParser("screenshot")
+		parsedArgs := args.ParseWithHandler(cmdArgs, argParser)
 
-		// Resolve VM ID
-		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		vmid := vmidInfo.Value
+		// Extract parsed values
+		vmid := parsedArgs.VMID
 
-		// Resolve output file
-		outputFileInfo := resolver.ResolveOutputFileWithInfo(args, 1)
-		if outputFileInfo.Value == "" {
-			fmt.Fprintf(os.Stderr, "Error: Output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable\n")
-			os.Exit(1)
+		// Get output file from remaining args or environment
+		var outputFile string
+		if len(parsedArgs.RemainingArgs) > 0 {
+			outputFile = parsedArgs.RemainingArgs[0]
+		} else {
+			// Try environment variable QMP_OUTPUT_FILE
+			outputFile = os.Getenv("QMP_OUTPUT_FILE")
+			if outputFile == "" {
+				utils.ValidationError(fmt.Errorf("output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable"))
+			}
 		}
-		outputFile := outputFileInfo.Value
 
-		// Log parameter resolution for debugging
-		if vmidInfo.Source != "argument" || outputFileInfo.Source != "argument" {
-			logging.Debug("Parameters resolved from non-argument sources",
-				"vmid", vmid, "vmid_source", vmidInfo.Source,
-				"output_file", outputFile, "output_source", outputFileInfo.Source)
-		}
+		// Log argument resolution for debugging
+		logging.Debug("Arguments parsed", "source", parsedArgs.Source, "output_file", outputFile)
 
 		// Start timer for performance monitoring
 		timer := logging.StartTimer("screenshot", vmid)
@@ -86,18 +84,12 @@ Examples:
 			"remote_temp", remoteTempPath)
 
 		// Create output directory if it doesn't exist
-		outputDir := filepath.Dir(outputFile)
-		if outputDir != "." {
-			if err := os.MkdirAll(outputDir, 0755); err != nil {
-				logger.Error("Failed to create output directory",
-					"output_dir", outputDir,
-					"error", err)
-				timer.StopWithError(err, map[string]interface{}{
-					"stage": "directory_creation",
-				})
-				os.Exit(1)
-			}
-			logger.Debug("Created output directory", "output_dir", outputDir)
+		if err := filesystem.EnsureDirectoryForFile(outputFile); err != nil {
+			logger.Error("Failed to create output directory", "error", err)
+			timer.StopWithError(err, map[string]interface{}{
+				"stage": "directory_creation",
+			})
+			utils.FileSystemError("create directory", outputFile, err)
 		}
 
 		client, err := ConnectToVM(vmid)
@@ -106,7 +98,7 @@ Examples:
 			timer.StopWithError(err, map[string]interface{}{
 				"stage": "connection",
 			})
-			os.Exit(1)
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
 

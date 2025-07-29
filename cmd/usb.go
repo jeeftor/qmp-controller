@@ -2,10 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/jeeftor/qmp-controller/internal/params"
-	"github.com/jeeftor/qmp-controller/internal/qmp"
+	"github.com/jeeftor/qmp-controller/internal/args"
+	"github.com/jeeftor/qmp-controller/internal/ui"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -31,38 +31,31 @@ Examples:
   export QMP_VM_ID=106
   qmp usb list`,
 	Args:  cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve VM ID using parameter resolver
-		resolver := params.NewParameterResolver()
-		vmidInfo, err := resolver.ResolveVMIDWithInfo(args, 0)
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewUSBArgumentParser()
+		parsedArgs := args.ParseWithHandler(append([]string{"list"}, cmdArgs...), argParser)
+
+		// List command doesn't need VM ID, but if provided, use it
+		vmid := ""
+		if parsedArgs.VMID != "" {
+			vmid = parsedArgs.VMID
+		}
+
+		client, err := ConnectToVM(vmid)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		vmid := vmidInfo.Value
-
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
-			os.Exit(1)
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
 
 		devices, err := client.QueryUSBDevices()
 		if err != nil {
-			fmt.Printf("Error listing USB devices: %v\n", err)
-			os.Exit(1)
+			utils.FatalError(err, "listing USB devices")
 		}
 
-		fmt.Printf("USB devices for VM %s:\n", vmid)
+		ui.USBDeviceMessage(vmid, "listed", "", "")
 		if len(devices) == 0 {
-			fmt.Println("No USB devices connected")
+			ui.InfoMessage("No USB devices connected")
 			return
 		}
 
@@ -87,62 +80,38 @@ Examples:
   export QMP_VM_ID=106
   qmp usb add keyboard usb-kbd1`,
 	Args:  cobra.RangeArgs(2, 3),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve VM ID using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewUSBArgumentParser()
+		parsedArgs := args.ParseWithHandler(append([]string{"add"}, cmdArgs...), argParser)
 
-		// Check if first arg is VM ID or device type
-		var vmid, deviceType, deviceID string
-		if len(args) == 3 {
-			// Traditional format: vmid type id
-			vmid = args[0]
-			deviceType = args[1]
-			deviceID = args[2]
-		} else if len(args) == 2 {
-			// New format with env var: type id
-			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1) // No args, use env var
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			vmid = vmidInfo.Value
-			deviceType = args[0]
-			deviceID = args[1]
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: Invalid number of arguments\n")
-			os.Exit(1)
+		// Extract parsed values
+		vmid := parsedArgs.VMID
+		if len(parsedArgs.RemainingArgs) < 2 {
+			utils.ValidationError(fmt.Errorf("device type and device ID are required"))
 		}
+		deviceType := parsedArgs.RemainingArgs[0]
+		deviceID := parsedArgs.RemainingArgs[1]
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
-			os.Exit(1)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
-
-		var err error
 		switch deviceType {
 		case "keyboard":
 			err = client.AddUSBKeyboard(deviceID)
 		case "mouse":
 			err = client.AddUSBMouse(deviceID)
 		default:
-			fmt.Printf("Unknown device type: %s. Supported types: keyboard, mouse\n", deviceType)
-			os.Exit(1)
+			utils.ValidationError(fmt.Errorf("unknown device type: %s. Supported types: keyboard, mouse", deviceType))
 		}
 
 		if err != nil {
-			fmt.Printf("Error adding USB %s: %v\n", deviceType, err)
-			os.Exit(1)
+			utils.FatalError(err, fmt.Sprintf("adding USB %s", deviceType))
 		}
 
-		fmt.Printf("Added USB %s with ID %s to VM %s\n", deviceType, deviceID, vmid)
+		ui.USBDeviceMessage(vmid, "added", deviceType, deviceID)
 	},
 }
 
@@ -161,49 +130,29 @@ Examples:
   export QMP_VM_ID=106
   qmp usb remove usb-kbd1`,
 	Args:  cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
-		// Resolve VM ID using parameter resolver
-		resolver := params.NewParameterResolver()
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Parse arguments using the new argument parser
+		argParser := args.NewUSBArgumentParser()
+		parsedArgs := args.ParseWithHandler(append([]string{"remove"}, cmdArgs...), argParser)
 
-		// Check if first arg is VM ID or device ID
-		var vmid, deviceID string
-		if len(args) == 2 {
-			// Traditional format: vmid deviceid
-			vmid = args[0]
-			deviceID = args[1]
-		} else if len(args) == 1 {
-			// New format with env var: deviceid
-			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1) // No args, use env var
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			vmid = vmidInfo.Value
-			deviceID = args[0]
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: Device ID is required\n")
-			os.Exit(1)
+		// Extract parsed values
+		vmid := parsedArgs.VMID
+		if len(parsedArgs.RemainingArgs) < 1 {
+			utils.ValidationError(fmt.Errorf("device ID is required"))
 		}
+		deviceID := parsedArgs.RemainingArgs[0]
 
-		var client *qmp.Client
-		if socketPath := GetSocketPath(); socketPath != "" {
-			client = qmp.NewWithSocketPath(vmid, socketPath)
-		} else {
-			client = qmp.New(vmid)
-		}
-
-		if err := client.Connect(); err != nil {
-			fmt.Printf("Error connecting to VM %s: %v\n", vmid, err)
-			os.Exit(1)
+		client, err := ConnectToVM(vmid)
+		if err != nil {
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
 
 		if err := client.RemoveDevice(deviceID); err != nil {
-			fmt.Printf("Error removing device %s: %v\n", deviceID, err)
-			os.Exit(1)
+			utils.FatalError(err, fmt.Sprintf("removing device %s", deviceID))
 		}
 
-		fmt.Printf("Removed device %s from VM %s\n", deviceID, vmid)
+		ui.USBDeviceMessage(vmid, "removed", "", deviceID)
 	},
 }
 

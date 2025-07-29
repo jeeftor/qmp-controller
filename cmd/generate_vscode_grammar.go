@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jeeftor/qmp-controller/internal/filesystem"
 	"github.com/spf13/cobra"
 )
 
@@ -620,7 +621,7 @@ func addCustomPatterns(grammar *TextMateGrammar) {
 // generateVSCodeExtension creates the complete VSCode extension
 func generateVSCodeExtension(outputDir string) error {
 	// Create output directory
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := filesystem.EnsureDirectory(outputDir); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -638,7 +639,7 @@ func generateVSCodeExtension(outputDir string) error {
 
 	// Write grammar file
 	grammarPath := filepath.Join(outputDir, "syntaxes", "qmp-script2.tmLanguage.json")
-	if err := os.MkdirAll(filepath.Dir(grammarPath), 0755); err != nil {
+	if err := filesystem.EnsureDirectoryForFile(grammarPath); err != nil {
 		return fmt.Errorf("failed to create syntaxes directory: %w", err)
 	}
 

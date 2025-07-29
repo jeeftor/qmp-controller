@@ -24,32 +24,13 @@
         ],
         "id": "qmp-script2"
       }
-    ],
-    "configuration": {
-      "type": "object",
-      "title": "QMP Script2",
-      "properties": {
-        "qmp-script2.formatOnSave": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically format QMP Script2 files on save"
-        },
-        "qmp-script2.indentSize": {
-          "type": "number",
-          "default": 2,
-          "description": "Number of spaces for indentation (always 2 for QMP Script2)"
-        }
-      }
-    }
+    ]
   },
-  "description": "Syntax highlighting and formatting for QMP Script2 automation files",
+  "description": "Syntax highlighting for QMP Script2 automation files",
   "devDependencies": {
-    "@types/vscode": "^1.60.0",
-    "@types/node": "^14.x",
-    "typescript": "^4.0.0",
     "vsce": "^2.15.0"
   },
-  "displayName": "QMP Script2 Language Support",
+  "displayName": "QMP Script2 Syntax Highlighting",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -67,16 +48,10 @@
     "type": "git",
     "url": "https://github.com/jeeftor/qmp-controller.git"
   },
-  "main": "./out/extension.js",
-  "activationEvents": [
-    "onLanguage:qmp-script2"
-  ],
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "compile": "echo 'No compilation needed for grammar-only extension'",
     "package": "vsce package",
     "publish": "vsce publish"
   },
-  "version": "0.0.2-5-g573fcdd-dev"
+  "version": "0.0.2-6-g53dc66a-dev"
 }

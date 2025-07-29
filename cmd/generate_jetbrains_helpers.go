@@ -1,8 +1,9 @@
 package cmd
 
 import (
-	"os"
 	"path/filepath"
+
+	"github.com/jeeftor/qmp-controller/internal/filesystem"
 )
 
 // generateJetbrainsHelpers creates additional helper files for the JetBrains plugin
@@ -24,7 +25,8 @@ func generateJetbrainsHelpers(outputDir string) error {
 	}
 
 	for filename, content := range helperClasses {
-		if err := os.WriteFile(filepath.Join(javaDir, filename), []byte(content), 0644); err != nil {
+		filePath := filepath.Join(javaDir, filename)
+		if err := filesystem.WriteFileWithDirectory(filePath, []byte(content), 0644); err != nil {
 			return err
 		}
 	}
@@ -569,11 +571,13 @@ eval set -- $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \"-Dorg.gradle.appname=$AP
 exec "$JAVACMD" "$@"`
 
 	// Write files
-	if err := os.WriteFile(filepath.Join(outputDir, "gradle", "wrapper", "gradle-wrapper.properties"), []byte(wrapperProps), 0644); err != nil {
+	wrapperPropsPath := filepath.Join(outputDir, "gradle", "wrapper", "gradle-wrapper.properties")
+	if err := filesystem.WriteFileWithDirectory(wrapperPropsPath, []byte(wrapperProps), 0644); err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(outputDir, "gradlew"), []byte(gradlewScript), 0755); err != nil {
+	gradlewPath := filepath.Join(outputDir, "gradlew")
+	if err := filesystem.WriteFileWithDirectory(gradlewPath, []byte(gradlewScript), 0755); err != nil {
 		return err
 	}
 
@@ -649,7 +653,8 @@ echo "Waiting for process to complete..."
 echo "Script completed successfully"
 <exit 0>`
 
-	return os.WriteFile(filepath.Join(outputDir, "example-script.sc2"), []byte(exampleScript), 0644)
+	examplePath := filepath.Join(outputDir, "example-script.sc2")
+	return filesystem.WriteFileWithDirectory(examplePath, []byte(exampleScript), 0644)
 }
 
 func generateSimpleParser() string {

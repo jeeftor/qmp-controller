@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/jeeftor/qmp-controller/internal/filesystem"
 	"github.com/spf13/cobra"
 )
 
@@ -159,7 +160,7 @@ func createJetbrainsDirectoryStructure(outputDir string) error {
 	}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := filesystem.EnsureDirectory(dir); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
