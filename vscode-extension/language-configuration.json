@@ -44,13 +44,27 @@
   ],
   "wordPattern": "([a-zA-Z_$][a-zA-Z0-9_$]*)|(<[^>]*>)",
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found)\\b.*$",
-    "decreaseIndentPattern": "^\\s*<(end-function|else)>\\s*$"
+    "increaseIndentPattern": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found|switch|case|default)\\b.*$",
+    "decreaseIndentPattern": "^\\s*<(end-function|end-if|end-switch|end-case|else|default|case)\\b.*$"
   },
   "folding": {
     "markers": {
-      "start": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found)\\b",
-      "end": "^\\s*<(end-function|else)>"
+      "start": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found|switch|case|default)\\b",
+      "end": "^\\s*<(end-function|end-if|end-switch|end-case|else)>"
     }
-  }
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*<(function|if-found|if-not-found|retry|repeat|while-found|while-not-found|switch|case|default)\\b.*$",
+      "action": {
+        "indent": "indent"
+      }
+    },
+    {
+      "beforeText": "^\\s*<else>\\s*$",
+      "action": {
+        "indent": "outdent"
+      }
+    }
+  ]}
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Variable expansion patterns (bash-compatible)
@@ -20,6 +21,9 @@ var (
 
 	// ${VAR:+value} - use value if VAR is set and non-empty
 	conditionalPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):+([^}]*)\}`)
+
+	// {VAR} - simple brace expansion (script2 style)
+	braceVarPattern = regexp.MustCompile(`\{([A-Za-z0-9_][A-Za-z0-9_]*)\}`)
 
 	// Variable assignment pattern: VAR=value or VAR=${...}
 	assignmentPattern = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
@@ -131,6 +135,38 @@ func (ve *VariableExpander) Expand(text string) (string, error) {
 		}
 
 		// Variable not found, return empty string (bash behavior)
+		return ""
+	})
+
+	// Process {VAR} format (script2 style)
+	result = braceVarPattern.ReplaceAllStringFunc(result, func(match string) string {
+		matches := braceVarPattern.FindStringSubmatch(match)
+		if len(matches) < 2 {
+			return match
+		}
+
+		varName := matches[1]
+
+		// Handle built-in placeholders
+		switch varName {
+		case "timestamp":
+			return time.Now().Format("20060102_150405")
+		case "date":
+			return time.Now().Format("2006-01-02")
+		case "time":
+			return time.Now().Format("15:04:05")
+		case "datetime":
+			return time.Now().Format("2006-01-02 15:04:05")
+		case "unix":
+			return fmt.Sprintf("%d", time.Now().Unix())
+		}
+
+		// Check user variables
+		if varValue, exists := ve.Get(varName); exists {
+			return varValue
+		}
+
+		// Variable not found, return empty string
 		return ""
 	})
 

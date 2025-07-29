@@ -65,7 +65,7 @@ vscode-extension:
 
 vscode-uninstall:
 	@echo "🗑️  Uninstalling old VSCode extension..."
-	code --uninstall-extension qmp-controller.qmp-script2 || true
+	code --uninstall-extension qmp-controscrller.qmp-script2 || true
 	@echo "✅ Old extension uninstalled!"
 
 vscode-install: vscode-extension vscode-uninstall

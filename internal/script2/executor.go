@@ -145,6 +145,18 @@ func (e *Executor) executeDryRun(script *Script, result *ExecutionResult, startT
 			// Provide detailed dry-run feedback for complex directives
 			if line.Type == DirectiveLine && line.Directive != nil {
 				e.simulateDirectiveExecution(line.Directive, logger)
+			} else if line.Type == TextLine {
+				// Simulate text line expansion
+				expandedText, err := e.context.Variables.Expand(line.Content)
+				if err != nil {
+					logger.Warn("Variable expansion failed in dry-run", "error", err, "text", line.Content)
+					expandedText = line.Content
+				}
+				logging.UserInfof("📝 [DRY-RUN] Would type: %s", expandedText)
+			} else if line.Type == VariableLine {
+				// Variable assignments are already handled by simulateDirectiveExecution
+				// but show them here for completeness
+				logging.UserInfof("📝 [DRY-RUN] Variable assignment: %s", line.ExpandedText)
 			}
 		}
 	}
@@ -1541,12 +1553,23 @@ func (e *Executor) simulateDirectiveExecution(directive *Directive, logger *logg
 		}
 
 	case FunctionCall:
+		// Expand arguments for display
+		expandedArgs := make([]string, len(directive.FunctionArgs))
+		for i, arg := range directive.FunctionArgs {
+			expandedArg, err := e.context.Variables.Expand(arg)
+			if err != nil {
+				logger.Warn("Variable expansion failed in function call simulation", "error", err, "arg", arg)
+				expandedArg = arg
+			}
+			expandedArgs[i] = expandedArg
+		}
+
 		logger.Info("📞 [DRY-RUN] Function call simulation",
 			"function", directive.FunctionName,
-			"args", directive.FunctionArgs)
+			"args", expandedArgs)
 
 		logging.UserInfof("📞 [DRY-RUN] Would call function: %s(%s)",
-			directive.FunctionName, strings.Join(directive.FunctionArgs, ", "))
+			directive.FunctionName, strings.Join(expandedArgs, ", "))
 
 		// Simulate function body if available
 		if e.script != nil {
@@ -1557,7 +1580,32 @@ func (e *Executor) simulateDirectiveExecution(directive *Directive, logger *logg
 						// Recursively simulate directives in function body
 						e.simulateDirectiveExecution(line.Directive, logger)
 					} else if line.Type == TextLine {
-						logging.UserInfof("       📝 Would type: %s", line.Content)
+						// Create function variable expander for proper simulation
+						localVars := make(map[string]string)
+						for i, arg := range directive.FunctionArgs {
+							// Expand the argument first
+							expandedArg, err := e.context.Variables.Expand(arg)
+							if err != nil {
+								logger.Warn("Variable expansion failed in function arg simulation", "error", err, "arg", arg)
+								expandedArg = arg
+							}
+							localVars[fmt.Sprintf("%d", i+1)] = expandedArg
+						}
+
+						callContext := &FunctionCallContext{
+							FunctionName: directive.FunctionName,
+							Parameters:   directive.FunctionArgs,
+							LocalVars:    localVars,
+						}
+						functionVariables := e.createFunctionVariableExpander(callContext)
+
+						// Expand variables with function parameters
+						expandedText, err := functionVariables.Expand(line.Content)
+						if err != nil {
+							logger.Warn("Variable expansion failed in function simulation", "error", err, "text", line.Content)
+							expandedText = line.Content
+						}
+						logging.UserInfof("       📝 Would type: %s", expandedText)
 					}
 				}
 			} else {
