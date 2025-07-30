@@ -709,7 +709,7 @@ func (e *Executor) performIncrementalOCRSearch(searchText string, operationType 
 	// INCREMENTAL PROCESSING: Check new lines first for performance optimization
 	if e.lastOCRText != nil && len(e.lastOCRText) > 0 {
 		// Find new or changed lines (incremental processing optimization)
-		diffLines := findDifferentLines(e.lastOCRText, results.Text)
+		diffLines := findDifferentLines(e.lastOCRText, results.Text, logger)
 		if len(diffLines) > 0 {
 			logger.Debug("OCR differences detected for incremental search", "operation", operationType, "diff_count", len(diffLines))
 
@@ -780,40 +780,130 @@ func (e *Executor) executeConditionalLine(line ParsedLine, logger *logging.Conte
 // Helper functions
 
 // findDifferentLines compares two sets of OCR text lines and returns lines that are different
-// It focuses on finding new lines that appear in the current OCR results but weren't in the previous results
-func findDifferentLines(previous, current []string) []string {
-	// Create a map of previous lines for quick lookup
-	prevMap := make(map[string]bool)
-	for _, line := range previous {
-		// Skip empty lines
-		if strings.TrimSpace(line) != "" {
-			prevMap[line] = true
-		}
+// Uses console-aware diff algorithm to handle scrolling behavior correctly
+func findDifferentLines(previous, current []string, logger *logging.ContextualLogger) []string {
+	if len(previous) == 0 {
+		// First run - all current lines are new
+		return current
 	}
 
-	// Find lines in current that weren't in previous
+	// Try to detect console scrolling by finding matching content offset
+	scrollOffset := detectScrollOffset(previous, current)
+
+	// Debug logging for scroll detection
+	if scrollOffset != 0 {
+		logger.Debug("Console scroll detected",
+			"scroll_offset", scrollOffset,
+			"previous_lines", len(previous),
+			"current_lines", len(current))
+	}
+
 	var diffLines []string
-	for _, line := range current {
+
+	// Compare lines accounting for scroll offset
+	for i, currentLine := range current {
 		// Skip empty lines
-		if strings.TrimSpace(line) == "" {
+		if strings.TrimSpace(currentLine) == "" {
 			continue
 		}
 
-		// If line wasn't in previous results, add it to diff
-		if !prevMap[line] {
-			diffLines = append(diffLines, line)
+		// Calculate corresponding previous line index accounting for scroll
+		prevIndex := i + scrollOffset
+
+		if prevIndex >= 0 && prevIndex < len(previous) {
+			prevLine := previous[prevIndex]
+
+			// Check if this line is truly new vs just shifted content
+			if currentLine != prevLine {
+				// Check for partial line changes (e.g., "e" -> "ef")
+				if strings.HasPrefix(currentLine, prevLine) && len(currentLine) > len(prevLine) {
+					// Line was extended - this is new content
+					diffLines = append(diffLines, currentLine)
+				} else if !containsLine(previous, currentLine) {
+					// Completely new line that didn't exist before
+					diffLines = append(diffLines, currentLine)
+				}
+				// If line exists elsewhere in previous, it's just scrolled content - don't flag as new
+			}
+		} else {
+			// Line index is beyond previous screen - this is new content at bottom
+			diffLines = append(diffLines, currentLine)
 		}
 	}
 
-	// Return lines in bottom-up order (as requested)
+	// Return lines in bottom-up order (newest first)
 	if len(diffLines) > 1 {
-		// Reverse the slice
+		// Reverse the slice to get bottom-up order
 		for i, j := 0, len(diffLines)-1; i < j; i, j = i+1, j-1 {
 			diffLines[i], diffLines[j] = diffLines[j], diffLines[i]
 		}
 	}
 
 	return diffLines
+}
+
+// detectScrollOffset tries to detect how many lines the console content has scrolled
+func detectScrollOffset(previous, current []string) int {
+	if len(previous) == 0 || len(current) == 0 {
+		return 0
+	}
+
+	// Look for the first matching line to determine scroll offset
+	for i, currentLine := range current {
+		if strings.TrimSpace(currentLine) == "" {
+			continue
+		}
+
+		// Find this line in the previous results
+		for j, prevLine := range previous {
+			if currentLine == prevLine {
+				// Found a match - calculate offset
+				offset := j - i
+				// Validate this offset makes sense by checking next few lines
+				if validateScrollOffset(previous, current, offset, i) {
+					return offset
+				}
+			}
+		}
+	}
+
+	return 0 // No clear scroll pattern detected
+}
+
+// validateScrollOffset checks if a detected scroll offset is consistent across multiple lines
+func validateScrollOffset(previous, current []string, offset, startIdx int) bool {
+	validMatches := 0
+	totalChecked := 0
+
+	// Check up to 3 lines to validate the offset
+	for i := startIdx; i < len(current) && i < startIdx+3; i++ {
+		currentLine := current[i]
+		if strings.TrimSpace(currentLine) == "" {
+			continue
+		}
+
+		prevIdx := i + offset
+		if prevIdx >= 0 && prevIdx < len(previous) {
+			prevLine := previous[prevIdx]
+			totalChecked++
+			if currentLine == prevLine || strings.HasPrefix(currentLine, prevLine) {
+				validMatches++
+			}
+		}
+	}
+
+	// Consider offset valid if at least 60% of checked lines match
+	return totalChecked > 0 && float64(validMatches)/float64(totalChecked) >= 0.6
+}
+
+// containsLine checks if a line exists anywhere in the slice
+func containsLine(lines []string, target string) bool {
+	for _, line := range lines {
+		if line == target {
+			return true
+		}
+	}
+	return false
 }
 
 // mapKeyName maps script2 key names to QMP key names
