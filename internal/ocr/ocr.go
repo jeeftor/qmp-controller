@@ -25,6 +25,10 @@ import (
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 )
 
+// UnknownCharIndicator is the character used to represent unrecognized characters
+// Changed from '?' to '¿' to avoid conflicts with legitimate question marks in text
+const UnknownCharIndicator = "¿"
+
 // OCRConfig holds all OCR-related configuration options
 type OCRConfig struct {
 	// Screen dimensions
@@ -872,7 +876,7 @@ func recognizeCharacter(bitmap CharacterBitmap, trainingData *TrainingData) stri
 
 	// No match found
 	logging.Debug("Character not recognized", "hexBitmap", hexBitmap)
-	return "?"
+	return UnknownCharIndicator
 }
 
 // compareBitmaps compares two bitmaps and returns a similarity score

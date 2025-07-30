@@ -82,8 +82,8 @@ func CreateCharacterBatches(result *ocr.OCRResult, termWidth int) []CharacterBat
 	seenHexKeys := make(map[string]bool)
 
 	for i, bitmap := range result.CharBitmaps {
-		// Check for unrecognized characters: either empty string (no training data) or "?" (unrecognized with training data)
-		if bitmap.Char == "" || bitmap.Char == "?" {
+		// Check for unrecognized characters: either empty string (no training data) or "¿" (unrecognized with training data)
+		if bitmap.Char == "" || bitmap.Char == ocr.UnknownCharIndicator {
 			hexKey := render.FormatBitmapAsHex(&bitmap)
 			if !seenHexKeys[hexKey] {
 				uniqueBitmaps = append(uniqueBitmaps, bitmap)

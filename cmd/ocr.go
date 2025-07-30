@@ -737,7 +737,7 @@ func formatTextOutput(result *ocr.OCRResult, filterBlanks bool, lineNumbers bool
 
 		// Color unrecognized characters
 		for _, char := range line {
-			if char == '?' {
+			if string(char) == ocr.UnknownCharIndicator {
 				sb.WriteString(unrecognizedStyle.Render(string(char)))
 			} else {
 				sb.WriteString(string(char))
@@ -774,7 +774,7 @@ func formatColoredTextOutput(result *ocr.OCRResult, filterBlanks bool, lineNumbe
 
 		// Process each character with its original color
 		for x, char := range line {
-			if char == '?' {
+			if string(char) == ocr.UnknownCharIndicator {
 				sb.WriteString(unrecognizedStyle.Render(string(char)))
 			} else {
 				// Calculate the character bitmap index
@@ -1376,7 +1376,7 @@ func handleInteractiveTraining(result *ocr.OCRResult, trainingDataPath string) e
 
 			// Update all matching characters in the result
 			for i := range result.CharBitmaps {
-				if result.CharBitmaps[i].Char == "" || result.CharBitmaps[i].Char == "?" {
+				if result.CharBitmaps[i].Char == "" || result.CharBitmaps[i].Char == ocr.UnknownCharIndicator {
 					if render.FormatBitmapAsHex(&result.CharBitmaps[i]) == hexKey {
 						result.CharBitmaps[i].Char = char
 					}

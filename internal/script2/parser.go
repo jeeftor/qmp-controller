@@ -81,7 +81,7 @@ var (
 	endFunctionRegex = regexp.MustCompile(`^end-function$`)
 	functionCallRegex = regexp.MustCompile(`^call\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(.+))?$`)
 
-	// Set directive
+	// Set directive (requires <> brackets like all other directives for consistency)
 	setRegex = regexp.MustCompile(`^set\s+([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"$`)
 )
 
@@ -622,6 +622,27 @@ func (p *Parser) parseDirectiveContent(directive *Directive, content string) err
 		directive.VariableName = matches[1]
 		directive.VariableValue = matches[2]
 		return nil
+	}
+
+	// Check for common set directive mistakes and provide helpful error messages
+	if strings.HasPrefix(content, "set ") {
+		// Parse the content to provide specific guidance
+		parts := strings.Fields(content)
+		if len(parts) >= 2 {
+			assignment := parts[1]
+			if strings.Contains(assignment, "=") && !strings.Contains(assignment, "\"") {
+				// Missing quotes around the value
+				splitAssign := strings.SplitN(assignment, "=", 2)
+				if len(splitAssign) == 2 {
+					varName := splitAssign[0]
+					varValue := splitAssign[1]
+					return fmt.Errorf("set directive requires quotes around value. Use: <set %s=\"%s\"> instead of <set %s>", varName, varValue, assignment)
+				}
+			} else if !strings.Contains(assignment, "=") {
+				return fmt.Errorf("set directive requires variable assignment. Use: <set variable=\"value\"> format")
+			}
+		}
+		return fmt.Errorf("invalid set directive syntax. Use: <set variable=\"value\"> (quotes required)")
 	}
 
 	return fmt.Errorf("unknown directive type: %s", content)

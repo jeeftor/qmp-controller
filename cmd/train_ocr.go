@@ -392,7 +392,7 @@ func runTrainingFlow(input, outputFile string, isVM bool) {
 
 			// Update all matching characters in the result
 			for i := range result.CharBitmaps {
-				if result.CharBitmaps[i].Char == "" || result.CharBitmaps[i].Char == "?" {
+				if result.CharBitmaps[i].Char == "" || result.CharBitmaps[i].Char == ocr.UnknownCharIndicator {
 					if render.FormatBitmapAsHex(&result.CharBitmaps[i]) == hexKey {
 						result.CharBitmaps[i].Char = char
 					}

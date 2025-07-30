@@ -164,7 +164,19 @@ func (e *Executor) executeDryRun(script *Script, result *ExecutionResult, startT
 
 			// Provide detailed dry-run feedback for complex directives
 			if line.Type == DirectiveLine && line.Directive != nil {
-				e.simulateDirectiveExecution(line.Directive, logger)
+				// Special case: Actually execute include directives during dry-run
+				// so that functions from included scripts are available for validation
+				if line.Directive.Type == Include {
+					logger.Debug("Executing include directive during dry-run for function merging")
+					if err := e.executeInclude(line.Directive, logger); err != nil {
+						logger.Error("Include failed during dry-run", "error", err)
+						result.Success = false
+						result.Error = fmt.Sprintf("include failed at line %d: %s", line.LineNumber, err.Error())
+						break
+					}
+				} else {
+					e.simulateDirectiveExecution(line.Directive, logger)
+				}
 			} else if line.Type == TextLine {
 				// Simulate text line expansion
 				expandedText, err := e.context.Variables.Expand(line.Content)
@@ -354,7 +366,9 @@ func (e *Executor) executeReturn(directive *Directive, logger *logging.Contextua
 // executeKeySequence sends special key sequences
 func (e *Executor) executeKeySequence(directive *Directive, logger *logging.ContextualLogger) error {
 	keyName := directive.KeyName
-	logger.Info("Sending key sequence", "key", keyName)
+	logger.Info("Sending key sequence",
+		"directive", "key",
+		"key", keyName)
 
 	// Map script2 key names to QMP key names
 	qmpKey := mapKeyName(keyName)
@@ -379,7 +393,10 @@ func (e *Executor) executeWatch(directive *Directive, logger *logging.Contextual
 	timeout := directive.Timeout
 	pollInterval := 500 * time.Millisecond
 
-	logger.Info("Watching for text", "text", searchText, "timeout", timeout)
+	logger.Info("Watching for text",
+		"directive", "watch",
+		"text", searchText,
+		"timeout", timeout)
 
 	// Start tracking watch operation in debugger if enabled
 	if e.debugger != nil && e.debugger.IsEnabled() {
@@ -403,6 +420,7 @@ func (e *Executor) executeWatch(directive *Directive, logger *logging.Contextual
 
 		if found {
 			logger.Info("Watch condition satisfied",
+				"directive", "watch",
 				"text", searchText,
 				"elapsed", time.Since(startTime))
 
@@ -486,7 +504,10 @@ func (e *Executor) executeConditionalIfFound(directive *Directive, logger *loggi
 	searchText := directive.SearchText
 	timeout := directive.Timeout
 
-	logger.Info("Executing if-found conditional", "text", searchText, "timeout", timeout)
+	logger.Info("Executing if-found conditional",
+		"directive", "if-found",
+		"text", searchText,
+		"timeout", timeout)
 
 	// Set default timeout if not specified
 	if timeout == 0 {
@@ -531,7 +552,7 @@ func (e *Executor) executeConditionalIfFound(directive *Directive, logger *loggi
 		time.Sleep(pollInterval)
 	}
 
-	searchCompleted:
+searchCompleted:
 
 	if found {
 		logger.Info("Condition met: text found on screen", "text", searchText)
@@ -1003,7 +1024,9 @@ func (e *Executor) executeWhileNotFound(directive *Directive, logger *logging.Co
 // executeInclude executes an included script file
 func (e *Executor) executeInclude(directive *Directive, logger *logging.ContextualLogger) error {
 	includePath := directive.IncludePath
-	logger.Info("Including script file", "path", includePath)
+	logger.Info("Including script file",
+		"directive", "include",
+		"path", includePath)
 	logging.UserInfof("📄 Including script: %s", includePath)
 
 	// Read the included script file
@@ -1027,7 +1050,18 @@ func (e *Executor) executeInclude(directive *Directive, logger *logging.Contextu
 		"path", includePath,
 		"total_lines", includedScript.Metadata.TotalLines,
 		"text_lines", includedScript.Metadata.TextLines,
-		"directive_lines", includedScript.Metadata.DirectiveLines)
+		"directive_lines", includedScript.Metadata.DirectiveLines,
+		"functions_found", len(includedScript.Functions))
+
+	// Merge functions from included script into main script's function registry
+	if len(includedScript.Functions) > 0 {
+		logger.Info("Merging functions from included script", "function_count", len(includedScript.Functions))
+		for name, function := range includedScript.Functions {
+			e.script.Functions[name] = function
+			logger.Debug("Merged function from included script", "function_name", name, "line_count", len(function.Lines))
+		}
+		logging.UserInfof("📋 Merged %d functions from included script", len(includedScript.Functions))
+	}
 
 	// Store original line context
 	originalLine := e.context.CurrentLine
@@ -1196,7 +1230,10 @@ func (e *Executor) executeFunctionCall(directive *Directive, logger *logging.Con
 	functionName := directive.FunctionName
 	args := directive.FunctionArgs
 
-	logger.Info("Calling function", "name", functionName, "args", args)
+	logger.Info("Calling function",
+		"directive", "call",
+		"name", functionName,
+		"args", args)
 	logging.UserInfof("📞 Calling function: %s(%s)", functionName, strings.Join(args, ", "))
 
 	// Check if function exists
@@ -1343,7 +1380,7 @@ func TakeTemporaryScreenshot(client *qmp.Client, prefix string) (*os.File, error
 
 // executeBreak handles the break directive for loops and debugging
 func (e *Executor) executeBreak(directive *Directive, logger *logging.ContextualLogger) error {
-	logger.Info("Break directive encountered")
+	logger.Info("Break directive encountered", "directive", "break")
 
 	// When debugging is enabled, <break> directives are handled by the debugger
 	// in the main execution loop (ShouldBreak/HandleBreak), so we just continue normally
@@ -1355,7 +1392,7 @@ func (e *Executor) executeBreak(directive *Directive, logger *logging.Contextual
 	}
 
 	// For loops and switch statements, return a special error to break out
-	logger.Info("Break directive encountered - breaking out of loop or switch")
+	logger.Info("Break directive encountered - breaking out of loop or switch", "directive", "break")
 	logging.UserInfof("⏹️ Break: Exiting current block")
 	return BreakLoopError{}
 }
@@ -1404,6 +1441,7 @@ func (e *Executor) executeSwitch(directive *Directive, logger *logging.Contextua
 	pollInterval := directive.PollInterval
 
 	logger.Info("Executing switch directive",
+		"directive", "switch",
 		"timeout", timeout,
 		"poll_interval", pollInterval,
 		"case_count", len(directive.Cases))
@@ -1452,33 +1490,46 @@ func (e *Executor) executeSwitch(directive *Directive, logger *logging.Contextua
 		combinedText := strings.Join(ocrText, "\n")
 		logger.Debug("OCR text for switch", "text", combinedText)
 
-		// Check each case pattern against the OCR text
+		// Scan lines bottom-up (newest first), checking all cases for each line
+
+		// Prepare expanded search patterns for all cases
+		expandedCases := make([]string, len(directive.Cases))
 		for i, switchCase := range directive.Cases {
-			// Expand variables in the search text
-			searchText, err := e.context.Variables.Expand(switchCase.SearchText)
+			expandedText, err := e.context.Variables.Expand(switchCase.SearchText)
 			if err != nil {
-				logger.Warn("Variable expansion failed in switch case", "error", err)
-				searchText = switchCase.SearchText // Fall back to unexpanded text
+				logger.Warn("Variable expansion failed in switch case", "error", err, "case", i)
+				expandedText = switchCase.SearchText // Fall back to unexpanded text
 			}
+			expandedCases[i] = expandedText
+		}
 
-			logger.Debug("Checking case pattern", "index", i, "pattern", searchText)
+		// Scan from bottom to top (newest content first)
+		for lineIdx := len(ocrText) - 1; lineIdx >= 0; lineIdx-- {
+			line := ocrText[lineIdx]
+			logger.Debug("Scanning line for switch cases", "line_number", lineIdx+1, "line_content", line)
 
-			// Check each line of OCR text for the pattern
-			found := false
-			for _, line := range ocrText {
+			// Check all cases against this line (in case declaration order)
+			for caseIdx, searchText := range expandedCases {
 				if strings.Contains(line, searchText) {
-					found = true
-					break
+					logger.Info("✅ Found matching case",
+						"directive", "switch",
+						"directive_sub", "case",
+						"case_index", caseIdx,
+						"pattern", searchText,
+						"match_line", lineIdx+1, // Convert to 1-based for user display
+						"full_line_content", line)
+
+					logging.UserInfof("✅ Switch: Matched case for text pattern \"%s\" - Line %d - Full Text: \"%s\"",
+						searchText, lineIdx+1, line)
+
+					matchedCase = caseIdx
+					matchedText = searchText
+					goto foundMatch // Break out of both loops
 				}
 			}
-
-			if found {
-				logger.Info("Found matching case", "index", i, "pattern", searchText)
-				matchedCase = i
-				matchedText = searchText
-				break
-			}
 		}
+
+		foundMatch:
 
 		// If we found a match, break out of the polling loop
 		if matchedCase >= 0 {
@@ -1491,8 +1542,11 @@ func (e *Executor) executeSwitch(directive *Directive, logger *logging.Contextua
 
 	// If we found a matching case, execute its block
 	if matchedCase >= 0 {
-		logging.UserInfof("✅ Switch: Matched case for text pattern \"%s\"", matchedText)
-		logger.Info("Executing matched case block", "index", matchedCase, "pattern", matchedText)
+		logger.Info("Executing matched case block",
+			"directive", "switch",
+			"directive_sub", "case",
+			"index", matchedCase,
+			"pattern", matchedText)
 
 		// Execute the lines in the matched case
 		for _, line := range directive.Cases[matchedCase].Lines {
@@ -1504,7 +1558,10 @@ func (e *Executor) executeSwitch(directive *Directive, logger *logging.Contextua
 
 				// Check for break error
 				if _, ok := err.(BreakLoopError); ok {
-					logger.Info("Break encountered in switch case, exiting switch")
+					logger.Info("Break encountered in switch case, exiting switch",
+						"directive", "switch",
+						"directive_sub", "case",
+						"action", "break")
 					break
 				}
 
@@ -1555,7 +1612,10 @@ func (e *Executor) executeSet(directive *Directive, logger *logging.ContextualLo
 		expandedValue = varValue
 	}
 
-	logger.Info("Setting variable", "name", varName, "value", expandedValue)
+	logger.Info("Setting variable",
+		"directive", "set",
+		"name", varName,
+		"value", expandedValue)
 	logging.UserInfof("📝 Setting variable %s=\"%s\"", varName, expandedValue)
 
 	// Set the variable in the context

@@ -53,5 +53,5 @@
     "package": "vsce package",
     "publish": "vsce publish"
   },
-  "version": "0.0.2-7-g386799e-dev"
+  "version": "0.0.2-8-g5e694b0-dev"
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ type OCRWatchTUIModel struct {
 	// Watch state
 	baselineText     []string
 	currentText      []string
+	currentResult    *ocr.OCRResult  // Store full OCR result for color mode
 	changes          map[int]map[int]bool
 	lastUserAction   time.Time
 	stateVersion     int
@@ -42,8 +44,7 @@ type OCRWatchTUIModel struct {
 // OCR Watch TUI message types
 type OCRWatchTickMsg time.Time
 type OCRWatchRefreshMsg struct {
-	text    []string
-	error   error
+	result  *OCRCaptureResult
 }
 type UserInputMsg struct{}
 
@@ -100,10 +101,9 @@ func (m OCRWatchTUIModel) tickCmd() tea.Cmd {
 // performInitialOCR performs the initial OCR capture
 func (m OCRWatchTUIModel) performInitialOCR() tea.Cmd {
 	return func() tea.Msg {
-		text, err := m.captureOCR()
+		result, _ := m.captureOCR()
 		return OCRWatchRefreshMsg{
-			text:  text,
-			error: err,
+			result: result,
 		}
 	}
 }
@@ -111,20 +111,26 @@ func (m OCRWatchTUIModel) performInitialOCR() tea.Cmd {
 // performOCRRefresh performs an OCR refresh
 func (m OCRWatchTUIModel) performOCRRefresh() tea.Cmd {
 	return func() tea.Msg {
-		text, err := m.captureOCR()
+		result, _ := m.captureOCR()
 		return OCRWatchRefreshMsg{
-			text:  text,
-			error: err,
+			result: result,
 		}
 	}
 }
 
-// captureOCR captures OCR from the VM
-func (m OCRWatchTUIModel) captureOCR() ([]string, error) {
+// OCRCaptureResult holds both text and bitmap data for color mode support
+type OCRCaptureResult struct {
+	Text    []string
+	Result  *ocr.OCRResult
+	Error   error
+}
+
+// captureOCR captures OCR from the VM and returns both text and full result for color support
+func (m OCRWatchTUIModel) captureOCR() (*OCRCaptureResult, error) {
 	// Take screenshot
 	tmpFile, err := TakeTemporaryScreenshot(m.client, "qmp-ocr-watch-tui")
 	if err != nil {
-		return nil, fmt.Errorf("screenshot failed: %v", err)
+		return &OCRCaptureResult{Error: fmt.Errorf("screenshot failed: %v", err)}, err
 	}
 	defer os.Remove(tmpFile.Name())
 	defer tmpFile.Close()
@@ -152,10 +158,10 @@ func (m OCRWatchTUIModel) captureOCR() ([]string, error) {
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("OCR processing failed: %v", err)
+		return &OCRCaptureResult{Error: fmt.Errorf("OCR processing failed: %v", err)}, err
 	}
 
-	return result.Text, nil
+	return &OCRCaptureResult{Text: result.Text, Result: result}, nil
 }
 
 // Update handles messages and updates the model
@@ -205,17 +211,20 @@ func (m OCRWatchTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalRefreshes++
 		m.lastRefresh = time.Now()
 
-		if msg.error != nil {
+		if msg.result.Error != nil {
 			return m, nil
 		}
+
+		// Store the full OCR result for color mode support
+		m.currentResult = msg.result.Result
 
 		// Handle the OCR result based on state
 		if m.baselineText == nil {
 			// Initial capture
-			m.baselineText = make([]string, len(msg.text))
-			copy(m.baselineText, msg.text)
-			m.currentText = make([]string, len(msg.text))
-			copy(m.currentText, msg.text)
+			m.baselineText = make([]string, len(msg.result.Text))
+			copy(m.baselineText, msg.result.Text)
+			m.currentText = make([]string, len(msg.result.Text))
+			copy(m.currentText, msg.result.Text)
 			m.changes = make(map[int]map[int]bool)
 		} else {
 			// Regular capture - detect changes
@@ -233,15 +242,15 @@ func (m OCRWatchTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Detect changes
-			newChanges := m.detectTextChanges(baselineForComparison, msg.text)
+			newChanges := m.detectTextChanges(baselineForComparison, msg.result.Text)
 			if len(newChanges) > 0 {
 				m.changes = newChanges
 				m.changesDetected += len(newChanges)
 			}
 
 			// Update current text
-			m.currentText = make([]string, len(msg.text))
-			copy(m.currentText, msg.text)
+			m.currentText = make([]string, len(msg.result.Text))
+			copy(m.currentText, msg.result.Text)
 		}
 
 		return m, nil
@@ -251,10 +260,18 @@ func (m OCRWatchTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// detectTextChanges compares two text arrays and returns positions of changes
+// detectTextChanges compares two text arrays with special handling for console scrolling
+// In a console, new text appears at the bottom and old text scrolls off the top
 func (m OCRWatchTUIModel) detectTextChanges(baseline []string, current []string) map[int]map[int]bool {
 	changes := make(map[int]map[int]bool)
 
+	// Handle console scrolling by comparing bottom-up first
+	if m.isConsoleScrolling(baseline, current) {
+		// Focus on the bottom part of the screen where new content appears
+		return m.detectScrollingChanges(baseline, current)
+	}
+
+	// Standard line-by-line comparison for non-scrolling scenarios
 	maxLines := len(baseline)
 	if len(current) > maxLines {
 		maxLines = len(current)
@@ -292,6 +309,103 @@ func (m OCRWatchTUIModel) detectTextChanges(baseline []string, current []string)
 				}
 
 				if baselineChar != currentChar {
+					changes[lineIdx][charIdx] = true
+				}
+			}
+		}
+	}
+
+	return changes
+}
+
+// isConsoleScrolling detects if the text change represents console scrolling
+// This happens when the bottom lines of baseline match the top lines of current
+func (m OCRWatchTUIModel) isConsoleScrolling(baseline []string, current []string) bool {
+	if len(baseline) == 0 || len(current) == 0 {
+		return false
+	}
+
+	// Check if bottom half of baseline matches top half of current
+	// This indicates text has scrolled up
+	minLen := len(baseline)
+	if len(current) < minLen {
+		minLen = len(current)
+	}
+
+	if minLen < 2 {
+		return false
+	}
+
+	// Compare bottom quarter of baseline with top quarter of current
+	compareLines := minLen / 4
+	if compareLines < 1 {
+		compareLines = 1
+	}
+
+	matchingLines := 0
+	for i := 0; i < compareLines; i++ {
+		baselineIdx := len(baseline) - compareLines + i
+		currentIdx := i
+
+		if baselineIdx >= 0 && baselineIdx < len(baseline) && currentIdx < len(current) {
+			if baseline[baselineIdx] == current[currentIdx] {
+				matchingLines++
+			}
+		}
+	}
+
+	// If most lines match, it's likely scrolling
+	return matchingLines >= compareLines/2
+}
+
+// detectScrollingChanges focuses on changes at the bottom of the screen for scrolling scenarios
+func (m OCRWatchTUIModel) detectScrollingChanges(baseline []string, current []string) map[int]map[int]bool {
+	changes := make(map[int]map[int]bool)
+
+	// In scrolling scenarios, focus on the bottom 25% of the screen where new content appears
+	focusLines := len(current) / 4
+	if focusLines < 3 {
+		focusLines = len(current) / 2 // At least half the screen
+	}
+	if focusLines < 1 {
+		focusLines = len(current) // Fallback to all lines
+	}
+
+	// Compare the bottom part of current with corresponding part of baseline
+	startLine := len(current) - focusLines
+	if startLine < 0 {
+		startLine = 0
+	}
+
+	for lineIdx := startLine; lineIdx < len(current); lineIdx++ {
+		var baselineLine string
+		currentLine := current[lineIdx]
+
+		// Try to find corresponding line in baseline
+		if lineIdx < len(baseline) {
+			baselineLine = baseline[lineIdx]
+		}
+
+		if baselineLine != currentLine {
+			if changes[lineIdx] == nil {
+				changes[lineIdx] = make(map[int]bool)
+			}
+
+			// Mark all characters in changed lines for scrolling scenarios
+			for charIdx, char := range currentLine {
+				var baselineChar rune
+				if charIdx < len(baselineLine) {
+					baselineChar = rune(baselineLine[charIdx])
+				}
+
+				if baselineChar != char {
+					changes[lineIdx][charIdx] = true
+				}
+			}
+
+			// Handle case where current line is longer than baseline
+			if len(currentLine) > len(baselineLine) {
+				for charIdx := len(baselineLine); charIdx < len(currentLine); charIdx++ {
 					changes[lineIdx][charIdx] = true
 				}
 			}
@@ -341,7 +455,21 @@ func (m OCRWatchTUIModel) View() string {
 	return strings.Join(sections, "\n")
 }
 
-// renderOCRContent renders the OCR content with change highlighting
+// getRepresentativeColor extracts the representative color from a character bitmap
+func (m OCRWatchTUIModel) getRepresentativeColor(bitmap ocr.CharacterBitmap) color.Color {
+	for y := 0; y < bitmap.Height; y++ {
+		for x := 0; x < bitmap.Width; x++ {
+			if bitmap.Data[y][x] { // If this pixel is "text" (not background)
+				if y < len(bitmap.Colors) && x < len(bitmap.Colors[y]) {
+					return bitmap.Colors[y][x]
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// renderOCRContent renders the OCR content with change highlighting and color mode support
 func (m OCRWatchTUIModel) renderOCRContent() []string {
 	var lines []string
 
@@ -349,6 +477,9 @@ func (m OCRWatchTUIModel) renderOCRContent() []string {
 	if m.config.FilterBlankLines {
 		text = m.removeBlankLines(text)
 	}
+
+	// Create unrecognized character style for highlighting '?' characters
+	unrecognizedStyle := styles.ErrorStyle.Background(lipgloss.Color("#FFFFFF"))
 
 	for lineIdx, line := range text {
 		var renderedLine strings.Builder
@@ -360,20 +491,55 @@ func (m OCRWatchTUIModel) renderOCRContent() []string {
 			renderedLine.WriteString("│ ")
 		}
 
-		// Render line with change highlighting
-		if m.changes != nil && m.changes[lineIdx] != nil {
-			// Line has changes - highlight individual characters
-			for charIdx, char := range line {
-				if m.changes[lineIdx][charIdx] {
-					// Highlight changed character with background color
-					renderedLine.WriteString(changedCharStyle.Render(string(char)))
+		// Process each character with color mode and change highlighting
+		for charIdx, char := range line {
+			var characterStyle lipgloss.Style
+
+			// Start with the base character styling
+			if m.config.ColorMode && m.currentResult != nil {
+				// Color mode - apply original colors from OCR bitmaps
+				if string(char) == ocr.UnknownCharIndicator {
+					// Special handling for unrecognized characters
+					characterStyle = unrecognizedStyle
 				} else {
-					renderedLine.WriteString(string(char))
+					// Calculate the character bitmap index (row-major order)
+					bitmapIdx := lineIdx*m.currentResult.Width + charIdx
+
+					if bitmapIdx < len(m.currentResult.CharBitmaps) {
+						bitmap := m.currentResult.CharBitmaps[bitmapIdx]
+						originalColor := m.getRepresentativeColor(bitmap)
+
+						if originalColor != nil {
+							// Create a color style based on the original pixel color
+							r, g, b, _ := originalColor.RGBA()
+							r8, g8, b8 := r>>8, g>>8, b>>8
+							characterStyle = styles.CreateFgStyle(uint8(r8), uint8(g8), uint8(b8))
+						} else {
+							// Fallback to normal color
+							characterStyle = lipgloss.NewStyle()
+						}
+					} else {
+						characterStyle = lipgloss.NewStyle()
+					}
+				}
+			} else {
+				// No color mode - use default styling
+				if string(char) == ocr.UnknownCharIndicator {
+					characterStyle = unrecognizedStyle
+				} else {
+					characterStyle = lipgloss.NewStyle()
 				}
 			}
-		} else {
-			// No changes in this line
-			renderedLine.WriteString(line)
+
+			// Apply change highlighting if the character has changed
+			if m.changes != nil && m.changes[lineIdx] != nil && m.changes[lineIdx][charIdx] {
+				// Character changed - add background highlighting
+				// Preserve the foreground color but add background
+				characterStyle = characterStyle.Background(lipgloss.Color(styles.Warning))
+			}
+
+			// Render the character with the combined styling
+			renderedLine.WriteString(characterStyle.Render(string(char)))
 		}
 
 		lines = append(lines, renderedLine.String())

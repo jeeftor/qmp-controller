@@ -612,6 +612,30 @@ echo "Login failed for user: $1"
 <call login_attempt admin backup-server secret123>
 <call check_login_status admin>
 
+# Function demonstrating <set> directive for local variables (consistent syntax)
+<function simple_login>
+    <set user="$1">
+    <set password="$2">
+    <watch "login:" 60s>
+    $user
+    <enter>
+    <watch "Password" 60s>
+    $password
+    <enter>
+
+    <switch timeout=10s poll=1s>
+        <case "Login incorrect">
+            <exit 1>
+        <end-case>
+        <case "~]$">
+            <return>
+        <end-case>
+    <end-switch>
+<end-function>
+
+# Call the function with parameters
+<call simple_login $USER $PASSWORD>
+
 # Example of escaping directive syntax (to type literal angle brackets)
 echo "To wait in a script, use: \\<wait 5s>"
 echo "To exit with code 1: \\<exit 1>"`
@@ -662,6 +686,7 @@ echo "To exit with code 1: \\<exit 1>"`
 		fmt.Printf("• Screenshot timestamps: {timestamp}, {date}, {time}, {datetime}, {unix}\n")
 		fmt.Printf("• <function name>, <end-function> - Define reusable functions\n")
 		fmt.Printf("• <call function_name args...> - Call functions with parameters ($1, $2, etc.)\n")
+		fmt.Printf("• <set variable=\"value\"> - Set local variables within functions (consistent syntax)\n")
 		fmt.Printf("• \\<directive> - Escape syntax to type literal angle brackets\n")
 		fmt.Printf("• Environment variable integration (--env-file, --var)\n")
 		fmt.Printf("• Dry run validation (--dry-run)\n")
