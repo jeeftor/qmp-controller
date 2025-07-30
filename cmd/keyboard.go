@@ -10,6 +10,8 @@ import (
 	"github.com/jeeftor/qmp-controller/internal/args"
 	"github.com/jeeftor/qmp-controller/internal/constants"
 	"github.com/jeeftor/qmp-controller/internal/logging"
+	"github.com/jeeftor/qmp-controller/internal/ocr"
+	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
@@ -17,7 +19,9 @@ import (
 )
 
 var (
-	keyDelay time.Duration
+	keyDelay         time.Duration
+	enhancedLiveMode bool
+	liveOCRConfig    = ocr.NewOCRConfig()
 )
 
 // Old LiveModeUI code removed - now using Bubble Tea TUI
@@ -128,46 +132,100 @@ Examples:
 
 // liveCmd represents the keyboard live command
 var liveCmd = &cobra.Command{
-	Use:   "live [vmid]",
-	Short: "Enter live keyboard mode",
+	Use:   "live [vmid] [training-data-file]",
+	Short: "Enter live keyboard mode (supports --enhanced with OCR)",
 	Long: `Enter live keyboard mode to type directly into the VM.
 This mode captures all keyboard input and sends it to the VM in real-time.
 Press Ctrl+^ (Ctrl+6) to exit live mode.
 
 The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+The training data file can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.
 
 Supported special keys:
 - Arrow keys (Up, Down, Left, Right)
 - Function keys (F1-F12)
 - Home, End, Page Up, Page Down
 - Insert, Delete
-
-Examples:
-  # Explicit VM ID
-  qmp keyboard live 106
-
-  # Using environment variable
-  export QMP_VM_ID=106
-  qmp keyboard live
 - Tab, Enter, Backspace, Escape
 - Ctrl+key combinations
 
-`,
-	Args: cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, cmdArgs []string) {
-		// Parse arguments using the new argument parser
-		argParser := args.NewKeyboardArgumentParser()
-		parsedArgs := args.ParseWithHandler(append([]string{"live"}, cmdArgs...), argParser)
+Enhanced Mode Features (--enhanced):
+- Real-time OCR display of VM screen content
+- Live screen updates as you type
+- Ctrl+R: Manual OCR refresh
+- Ctrl+A: Toggle auto-refresh
+- Ctrl+O: Toggle OCR display
 
-		// Extract parsed values
-		vmid := parsedArgs.VMID
+Examples:
+  # Basic live mode
+  qmp keyboard live 106
+
+  # Enhanced mode with OCR
+  qmp keyboard live 106 training.json --enhanced
+
+  # Using environment variables
+  export QMP_VM_ID=106
+  export QMP_TRAINING_DATA=training.json
+  qmp keyboard live --enhanced
+
+`,
+	Args: cobra.RangeArgs(0, 2),
+	Run: func(cmd *cobra.Command, cmdArgs []string) {
+		// Use parameter resolver for flexible argument parsing
+		resolver := params.NewParameterResolver()
+
+		// Determine parameter layout based on number of arguments
+		var vmid, trainingDataPath string
+
+		if len(cmdArgs) == 2 {
+			// Traditional format: vmid trainingdata
+			vmid = cmdArgs[0]
+			trainingDataPath = cmdArgs[1]
+		} else if len(cmdArgs) == 1 {
+			// Could be: vmid OR trainingdata
+			// Try to resolve VM ID from first arg
+			vmidInfo, err := resolver.ResolveVMIDWithInfo(cmdArgs, 0)
+			if err == nil {
+				// First arg is valid VM ID
+				vmid = vmidInfo.Value
+				trainingDataPath = resolver.ResolveTrainingData([]string{}, -1) // From env or default
+			} else {
+				// First arg is not VM ID, try environment variable
+				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+				if err != nil {
+					utils.ValidationError(err)
+				}
+				vmid = vmidInfo.Value
+				trainingDataPath = cmdArgs[0]
+			}
+		} else if len(cmdArgs) == 0 {
+			// VM ID and training data from env vars
+			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
+			if err != nil {
+				utils.ValidationError(err)
+			}
+			vmid = vmidInfo.Value
+			trainingDataPath = resolver.ResolveTrainingData([]string{}, -1)
+		}
+
+		// Sync OCR configuration from flags
+		syncLiveOCRConfig(trainingDataPath)
 
 		client, err := ConnectToVM(vmid)
 		utils.CheckErrorWithCode(err, "connecting to VM "+vmid, utils.ExitCodeConnection)
 		defer client.Close()
 
-		// Create the Bubble Tea TUI model
-		model := NewLiveTUIModel(vmid, client)
+		// Create the appropriate TUI model
+		var model tea.Model
+		if enhancedLiveMode {
+			logging.UserInfo("🔍 Enhanced live mode with OCR enabled")
+			if trainingDataPath == "" {
+				logging.UserWarn("Enhanced mode requested but no training data available - OCR will be disabled")
+			}
+			model = NewEnhancedLiveTUIModel(vmid, client, trainingDataPath, liveOCRConfig.Columns, liveOCRConfig.Rows)
+		} else {
+			model = NewLiveTUIModel(vmid, client)
+		}
 
 		// Start the Bubble Tea program
 		p := tea.NewProgram(model, tea.WithAltScreen())
@@ -470,6 +528,32 @@ func getKeyDelay() time.Duration {
 	return constants.DefaultKeyDelay
 }
 
+// syncLiveOCRConfig populates the live OCR config from command flags and config
+func syncLiveOCRConfig(trainingDataPath string) {
+	// Set training data path from argument or environment
+	if trainingDataPath != "" {
+		liveOCRConfig.TrainingDataPath = trainingDataPath
+		logging.Debug("Using training data for live OCR", "path", trainingDataPath)
+	}
+
+	// Update OCR config from flags and config values
+	if widthFlag := viper.GetInt("keyboard.live.columns"); widthFlag > 0 {
+		liveOCRConfig.Columns = widthFlag
+	}
+
+	if heightFlag := viper.GetInt("keyboard.live.rows"); heightFlag > 0 {
+		liveOCRConfig.Rows = heightFlag
+	}
+
+	// Check config file for training data if not provided as argument
+	if liveOCRConfig.TrainingDataPath == "" {
+		if configPath := viper.GetString("ocr.training_data"); configPath != "" {
+			liveOCRConfig.TrainingDataPath = configPath
+			logging.Debug("Training data path from config for live OCR", "path", configPath)
+		}
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(keyboardCmd)
 	keyboardCmd.AddCommand(sendKeyCmd)
@@ -479,9 +563,17 @@ func init() {
 	keyboardCmd.AddCommand(testCmd)
 	keyboardCmd.AddCommand(consoleCmd)
 
-	// Add flags for keyboard commands - use "l" as shorthand for delay
+	// Add flags for keyboard commands
 	typeTextCmd.Flags().DurationVarP(&keyDelay, "delay", "l", 0, "delay between key presses (default 50ms)")
+
+	// Enhanced live mode flags
+	liveCmd.Flags().BoolVar(&enhancedLiveMode, "enhanced", false, "Enable enhanced live mode with OCR display")
+	liveCmd.Flags().IntVarP(&liveOCRConfig.Columns, "columns", "c", qmp.DEFAULT_WIDTH, "screen width for OCR")
+	liveCmd.Flags().IntVarP(&liveOCRConfig.Rows, "rows", "r", qmp.DEFAULT_HEIGHT, "screen height for OCR")
 
 	// Bind flags to viper
 	viper.BindPFlag("keyboard.delay", typeTextCmd.Flags().Lookup("delay"))
+	viper.BindPFlag("keyboard.live.enhanced", liveCmd.Flags().Lookup("enhanced"))
+	viper.BindPFlag("keyboard.live.columns", liveCmd.Flags().Lookup("columns"))
+	viper.BindPFlag("keyboard.live.rows", liveCmd.Flags().Lookup("rows"))
 }

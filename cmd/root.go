@@ -10,6 +10,7 @@ import (
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/jeeftor/qmp-controller/internal/resource"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -17,6 +18,7 @@ import (
 var (
     cfgFile    string
     logLevel   string
+    logFile    string
     socketPath string
     profileName string
 
@@ -33,13 +35,22 @@ QEMU's QMP (QEMU Machine Protocol) for managing virtual machines.`,
     PersistentPreRun: func(cmd *cobra.Command, args []string) {
         // Default to info level if not specified
         if logLevel == "" {
-            logLevel = "info"
+            logLevel = viper.GetString("log_level")
         }
 
-        // Initialize logging with the specified level
-        logging.InitWithLevel(logLevel)
+        // Get log file from flag or environment variable
+        if logFile == "" {
+            logFile = viper.GetString("log_file")
+        }
 
-        logging.Debug("Logging initialized", "level", logLevel)
+        // Initialize logging with the specified level and optional file
+        if logFile != "" {
+            logging.InitWithLevelAndFile(logLevel, logFile)
+        } else {
+            logging.InitWithLevel(logLevel)
+        }
+
+        logging.Debug("Logging initialized", "level", logLevel, "log_file", logFile)
         logging.Debug("Using socket path", "path", GetSocketPath())
     },
 }
@@ -55,11 +66,13 @@ func init() {
     // Global flags
     rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.qmp.yaml)")
     rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "", "log level (trace, debug, info, warn, error)")
+    rootCmd.PersistentFlags().StringVar(&logFile, "log-file", "", "log file path (logs to both console and file)")
     rootCmd.PersistentFlags().StringVarP(&socketPath, "socket", "s", "", "custom socket path (for SSH tunneling)")
     rootCmd.PersistentFlags().StringVarP(&profileName, "profile", "p", "", "configuration profile to use")
 
     // Bind flags to Viper
     viper.BindPFlag("log_level", rootCmd.PersistentFlags().Lookup("log-level"))
+    viper.BindPFlag("log_file", rootCmd.PersistentFlags().Lookup("log-file"))
     viper.BindPFlag("socket", rootCmd.PersistentFlags().Lookup("socket"))
     viper.BindPFlag("profile", rootCmd.PersistentFlags().Lookup("profile"))
 }
@@ -82,6 +95,7 @@ func initConfig() {
 
     // Set default values
     viper.SetDefault("log_level", "info")
+    viper.SetDefault("log_file", "")       // QMP_LOG_FILE
     viper.SetDefault("socket", "")
 
     // OCR-related defaults (can be overridden by QMP_* environment variables)
@@ -288,15 +302,13 @@ func applyProfile(profileName string) {
     profileKey := fmt.Sprintf("profiles.%s", profileName)
 
     if !viper.IsSet(profileKey) {
-        logging.UserErrorf("Profile '%s' not found in configuration", profileName)
-        os.Exit(1)
+        utils.ValidationErrorf("Profile '%s' not found in configuration", profileName)
     }
 
     // Get all profile settings
     profileSettings := viper.GetStringMap(profileKey)
     if len(profileSettings) == 0 {
-        logging.UserErrorf("Profile '%s' is empty", profileName)
-        os.Exit(1)
+        utils.ValidationErrorf("Profile '%s' is empty", profileName)
     }
 
     logging.Debug("Applying profile settings", "profile", profileName, "settings_count", len(profileSettings))

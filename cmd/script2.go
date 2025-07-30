@@ -13,14 +13,15 @@ import (
 
 var (
 	// Script2 command flags
-	scriptVars       []string // --var key=value
-	envFile          string   // --env-file .env
-	dryRun           bool     // --dry-run
-	scriptTimeout    string   // --timeout 300s
-	debugMode        bool     // --debug (step mode)
-	debugInteractive bool     // --debug-interactive (TUI mode)
-	debugConsole     bool     // --debug-console (force console mode)
-	debugBreakpoints []int    // --breakpoint line1,line2,line3
+	scriptVars          []string // --var key=value
+	envFile             string   // --env-file .env
+	dryRun              bool     // --dry-run
+	scriptTimeout       string   // --timeout 300s
+	debugMode           bool     // --debug (step mode)
+	debugInteractive    bool     // --debug-interactive (TUI mode)
+	debugEnhanced       bool     // --debug-enhanced (Enhanced TUI mode)
+	debugConsole        bool     // --debug-console (force console mode)
+	debugBreakpoints    []int    // --breakpoint line1,line2,line3
 )
 
 // script2Cmd represents the enhanced script command
@@ -88,6 +89,9 @@ Examples:
 
   # Interactive debugging with TUI
   qmp script2 106 login.script --debug-interactive
+
+  # Enhanced debugging with OCR TUI
+  qmp script2 106 login.script --debug-enhanced
 
   # Console debugging (SSH/remote friendly)
   qmp script2 106 login.script --debug-console
@@ -213,11 +217,14 @@ Examples:
 			executor.SetScript(script) // Set script for function access
 
 			// Enable debugging for dry-run if requested
-			if debugMode || debugInteractive || debugConsole || len(debugBreakpoints) > 0 {
+			if debugMode || debugInteractive || debugEnhanced || debugConsole || len(debugBreakpoints) > 0 {
 				var debugModeType script2.DebugMode
 				if debugConsole {
 					debugModeType = script2.DebugModeBreakpoints
 					logging.UserInfo("🐛 Dry-run with console debugging - SSH/remote friendly")
+				} else if debugEnhanced {
+					debugModeType = script2.DebugModeInteractive
+					logging.UserInfo("🔍 Dry-run with enhanced debugging - Advanced OCR TUI with performance monitoring")
 				} else if debugInteractive {
 					debugModeType = script2.DebugModeInteractive
 					logging.UserInfo("🐛 Dry-run with interactive debugging - TUI will appear on breakpoints")
@@ -230,6 +237,11 @@ Examples:
 				}
 
 				debugger := executor.EnableDebugging(debugModeType)
+
+				// Enable enhanced TUI if requested
+				if debugEnhanced {
+					debugger.EnableEnhancedTUI()
+				}
 
 				// Set initial breakpoints
 				for _, lineNum := range debugBreakpoints {
@@ -303,12 +315,17 @@ Examples:
 		executor.SetScript(script) // Set script for function access
 
 		// Set up debugging if requested
-		if debugMode || debugInteractive || debugConsole || len(debugBreakpoints) > 0 {
+		if debugMode || debugInteractive || debugEnhanced || debugConsole || len(debugBreakpoints) > 0 {
 			var debugModeType script2.DebugMode
 			if debugConsole {
 				debugModeType = script2.DebugModeBreakpoints // Force console mode
 				logging.UserInfo("🐛 Console debugging enabled - perfect for SSH/remote sessions")
 				logging.UserInfo("   Will break on line 1, <break> directives, and set breakpoints")
+			} else if debugEnhanced {
+				debugModeType = script2.DebugModeInteractive
+				logging.UserInfo("🔍 Enhanced debugging enabled - Advanced OCR TUI with real-time monitoring")
+				logging.UserInfo("   Enhanced features: O=full OCR, /=search, g=grid, d=diff, e=export, p=performance")
+				logging.UserInfo("   Navigation: ↑↓←→/hjkl=navigate grid, r=refresh, a=auto-refresh")
 			} else if debugInteractive {
 				debugModeType = script2.DebugModeInteractive
 				logging.UserInfo("🐛 Interactive debugging enabled - TUI will appear on line 1 and breakpoints")
@@ -328,6 +345,11 @@ Examples:
 			}
 
 			debugger := executor.EnableDebugging(debugModeType)
+
+			// Enable enhanced TUI if requested
+			if debugEnhanced {
+				debugger.EnableEnhancedTUI()
+			}
 
 			// Set initial breakpoints
 			for _, lineNum := range debugBreakpoints {
@@ -673,6 +695,9 @@ func init() {
 	script2Cmd.Flags().BoolVar(&debugInteractive, "debug-interactive", false,
 		"Enable interactive TUI debugging mode")
 
+	script2Cmd.Flags().BoolVar(&debugEnhanced, "debug-enhanced", false,
+		"Enable enhanced TUI debugging with advanced OCR features")
+
 	script2Cmd.Flags().BoolVar(&debugConsole, "debug-console", false,
 		"Enable console debugging mode (SSH/remote friendly)")
 
@@ -685,6 +710,9 @@ func init() {
 
   # Script with WATCH commands (requires training data)
   qmp script2 106 login.script training.json
+
+  # Enhanced debugging with advanced OCR TUI
+  qmp script2 106 login.script training.json --debug-enhanced
 
   # Override specific variables
   qmp script2 106 login.script training.json --var USER=admin --var RETRY_COUNT=5

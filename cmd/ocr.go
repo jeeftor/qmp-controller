@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-
 	"github.com/jeeftor/qmp-controller/internal/filesystem"
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/ocr"
@@ -149,6 +148,8 @@ var (
 	showLineNumbers    bool
 	updateTraining     bool
 	renderSpecialChars bool
+	watchMode          bool
+	watchInterval      int
 )
 
 // ocrCmd represents the ocr command
@@ -203,7 +204,13 @@ Examples:
   qmp ocr vm 106 training.json text.txt --columns 160 --rows 50 --line-numbers
 
   # Interactive training for unrecognized characters
-  qmp ocr vm 106 training.json text.txt --columns 160 --rows 50 --update-training`, ArgVMID, ArgTrainingData, ArgOutputTextFile),
+  qmp ocr vm 106 training.json text.txt --columns 160 --rows 50 --update-training
+
+  # Watch mode - continuously monitor screen changes with TUI interface
+  qmp ocr vm 106 training.json --watch --watch-interval 2
+
+  # Watch mode with filtering and line numbers
+  qmp ocr vm 106 training.json --watch --filter --line-numbers`, ArgVMID, ArgTrainingData, ArgOutputTextFile),
 	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		// Use flexible argument parsing
@@ -274,10 +281,7 @@ Examples:
 
 		// Fallback to basic validation for any edge cases
 		if err := ocrConfig.ValidateAndParse(); err != nil {
-			logging.Error("Basic OCR configuration validation failed",
-				"vmid", vmid,
-				"error", err)
-			os.Exit(1)
+			utils.FatalErrorWithCode(err, "Basic OCR configuration validation failed", utils.ExitCodeValidation)
 		}
 
 		// Log the training data path after validation
@@ -285,8 +289,7 @@ Examples:
 
 		// Validate screen dimensions
 		if ocrConfig.Columns <= 0 || ocrConfig.Rows <= 0 {
-			fmt.Println("Error: Columns and rows must be positive integers")
-			os.Exit(1)
+			utils.ConfigurationError("Screen dimensions:", "Columns and rows must be positive integers")
 		}
 
 		// Create output directory if it doesn't exist
@@ -298,16 +301,14 @@ Examples:
 
 		client, err := ConnectToVM(vmid)
 		if err != nil {
-			logging.Error("Failed to connect to VM", "vmid", vmid, "error", err)
-			os.Exit(1)
+			utils.ConnectionError(vmid, err)
 		}
 		defer client.Close()
 
 		// Take a temporary screenshot using centralized helper
 		tmpFile, err := TakeTemporaryScreenshot(client, "qmp-ocr")
 		if err != nil {
-			logging.Error("Failed to take screenshot", "vmid", vmid, "error", err)
-			os.Exit(1)
+			utils.FatalErrorWithCode(err, "Failed to take screenshot", utils.ExitCodeGeneral)
 		}
 		defer os.Remove(tmpFile.Name())
 		tmpFile.Close()
@@ -333,8 +334,7 @@ Examples:
 		})
 
 		if processErr != nil {
-			fmt.Fprintf(os.Stderr, "Error processing file for OCR: %v\n", processErr)
-			os.Exit(1)
+			utils.ProcessingError("processing file for OCR", processErr)
 		}
 
 		// Log OCR results
@@ -381,11 +381,18 @@ Examples:
 			}
 			logging.Info("OCR results saved successfully", "output_file", outputTextFile)
 		} else {
-			// Print to screen
-			fmt.Println(output)
+			// Check if watch mode is enabled
+			if watchMode {
+				// Start watch mode TUI with change detection
+				runOCRWatchTUI(client, vmid, ocrConfig, outputTextFile)
+			} else {
+				// Print to screen (regular one-time OCR)
+				fmt.Println(output)
+			}
 		}
 	},
 }
+
 
 // ocrFileCmd represents the ocr file command
 var ocrFileCmd = &cobra.Command{
@@ -508,8 +515,7 @@ Examples:
 		if singleChar {
 			bitmap, err := ocr.ExtractSingleCharacter(inputImageFile, columns, rows, charRow, charCol)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error extracting character: %v\n", err)
-				os.Exit(1)
+				utils.ProcessingError("extracting character", err)
 			}
 
 			// Create a minimal OCR result with just this character
@@ -542,8 +548,7 @@ Examples:
 			// Save or print the output
 			if outputTextFile != "" {
 				if err := os.WriteFile(outputTextFile, []byte(output), 0644); err != nil {
-					fmt.Fprintf(os.Stderr, "Error saving character extraction: %v\n", err)
-					os.Exit(1)
+					utils.FileSystemError("write", outputTextFile, err)
 				}
 				logging.Info("Character extraction saved successfully", "output_file", outputTextFile)
 			} else {
@@ -570,8 +575,7 @@ Examples:
 		}
 
 		if processErr != nil {
-			fmt.Fprintf(os.Stderr, "Error processing file for OCR: %v\n", processErr)
-			os.Exit(1)
+			utils.ProcessingError("processing file for OCR", processErr)
 		}
 
 		// Handle interactive training if enabled
@@ -620,20 +624,14 @@ func parseCropParameters() {
 	if cropRowsStr != "" {
 		parts := strings.Split(cropRowsStr, ":")
 		if len(parts) != 2 {
-			fmt.Println("Error: Crop rows must be in the format 'start:end' (e.g., '5:20')")
-			os.Exit(1)
+			utils.CropFormatError("rows", "start:end")
 		}
 
 		fmt.Sscanf(parts[0], "%d", &cropStartRow)
 		fmt.Sscanf(parts[1], "%d", &cropEndRow)
 
 		if cropStartRow < 0 || cropEndRow < cropStartRow || cropEndRow >= rows {
-			logging.Error("Invalid crop row range",
-				"crop_start_row", cropStartRow,
-				"crop_end_row", cropEndRow,
-				"max_rows", rows,
-				"constraint", "must be 0 <= start <= end < max_rows")
-			os.Exit(1)
+			utils.RangeValidationError("crop_row", cropStartRow, cropEndRow, rows, "must be 0 <= start <= end < max_rows")
 		}
 	} else {
 		cropStartRow = 0
@@ -644,20 +642,14 @@ func parseCropParameters() {
 	if cropColsStr != "" {
 		parts := strings.Split(cropColsStr, ":")
 		if len(parts) != 2 {
-			fmt.Println("Error: Crop columns must be in the format 'start:end' (e.g., '10:50')")
-			os.Exit(1)
+			utils.CropFormatError("columns", "start:end")
 		}
 
 		fmt.Sscanf(parts[0], "%d", &cropStartCol)
 		fmt.Sscanf(parts[1], "%d", &cropEndCol)
 
 		if cropStartCol < 0 || cropEndCol < cropStartCol || cropEndCol >= columns {
-			logging.Error("Invalid crop column range",
-				"crop_start_col", cropStartCol,
-				"crop_end_col", cropEndCol,
-				"max_columns", columns,
-				"constraint", "must be 0 <= start <= end < max_columns")
-			os.Exit(1)
+			utils.RangeValidationError("crop_col", cropStartCol, cropEndCol, columns, "must be 0 <= start <= end < max_columns")
 		}
 	} else {
 		cropStartCol = 0
@@ -1000,8 +992,7 @@ var ocrFindVMCmd = &cobra.Command{
 		if parser.VMID != "" {
 			vmid = parser.VMID
 		} else {
-			fmt.Fprintf(os.Stderr, "Error: VM ID is required: provide as argument or set QMP_VM_ID environment variable\n")
-			os.Exit(1)
+			utils.RequiredParameterError("VM ID", "QMP_VM_ID")
 		}
 
 		if parser.TrainingData != "" {
@@ -1018,8 +1009,7 @@ var ocrFindVMCmd = &cobra.Command{
 		}
 
 		if searchString == "" {
-			fmt.Fprintf(os.Stderr, "Error: Search string is required\n")
-			os.Exit(1)
+			utils.RequiredParameterError("Search string", "")
 		}
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
@@ -1111,8 +1101,7 @@ var ocrReVMCmd = &cobra.Command{
 		if parser.VMID != "" {
 			vmid = parser.VMID
 		} else {
-			fmt.Fprintf(os.Stderr, "Error: VM ID is required: provide as argument or set QMP_VM_ID environment variable\n")
-			os.Exit(1)
+			utils.RequiredParameterError("VM ID", "QMP_VM_ID")
 		}
 
 		if parser.TrainingData != "" {
@@ -1129,8 +1118,7 @@ var ocrReVMCmd = &cobra.Command{
 		}
 
 		if pattern == "" {
-			fmt.Fprintf(os.Stderr, "Error: Regex pattern is required\n")
-			os.Exit(1)
+			utils.RequiredParameterError("Regex pattern", "")
 		}
 
 		result, err := processOCRResult(vmid, trainingDataPath, true)
@@ -1224,6 +1212,8 @@ func init() {
 	ocrVmCmd.Flags().BoolVarP(&showLineNumbers, "line-numbers", "n", false, "Show line numbers (0-based) with colored output")
 	ocrVmCmd.Flags().BoolVarP(&updateTraining, "update-training", "u", false, "Interactively train unrecognized characters")
 	ocrVmCmd.Flags().BoolVar(&renderSpecialChars, "render", false, "Render special characters (spaces, tabs, newlines) visually")
+	ocrVmCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode - continuously refresh OCR and highlight changes")
+	ocrVmCmd.Flags().IntVar(&watchInterval, "watch-interval", 2, "Watch mode refresh interval in seconds")
 
 	// Add flags to File command
 	ocrFileCmd.Flags().IntVarP(&columns, "columns", "c", qmp.DEFAULT_WIDTH, "Number of columns")

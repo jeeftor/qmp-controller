@@ -13,6 +13,7 @@ import (
 	"github.com/jeeftor/qmp-controller/internal/params"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/jeeftor/qmp-controller/internal/script"
+	"github.com/jeeftor/qmp-controller/internal/utils"
 	"github.com/jeeftor/qmp-controller/internal/validation"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -22,7 +23,8 @@ var (
 	scriptDelay time.Duration
 	commentStr  string
 	controlStr  string
-	useTUI      bool
+	useTUI         bool
+	useEnhancedTUI bool
 
 	// WATCH command OCR settings
 	scriptOCRConfig   = ocr.NewOCRConfig()
@@ -109,8 +111,7 @@ Script file example:
 				// First arg is not VM ID, try environment variable
 				vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
+					utils.ValidationError(err)
 				}
 				vmid = vmidInfo.Value
 				scriptFile = args[0]
@@ -120,15 +121,13 @@ Script file example:
 			// Only script file, VM ID and training data from env vars
 			vmidInfo, err := resolver.ResolveVMIDWithInfo([]string{}, -1)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
+				utils.ValidationError(err)
 			}
 			vmid = vmidInfo.Value
 			scriptFile = args[0]
 			trainingDataPath = resolver.ResolveTrainingData([]string{}, -1)
 		} else {
-			fmt.Fprintf(os.Stderr, "Error: Script file is required\n")
-			os.Exit(1)
+			utils.RequiredParameterError("Script file", "")
 		}
 
 		// Set training data path in OCR config
@@ -150,18 +149,13 @@ Script file example:
 		// Do this BEFORE connecting to VM to fail fast if requirements aren't met
 		hasWatchCommands, err := scanScriptForWatchCommands(scriptFile)
 		if err != nil {
-			logging.Error("Failed to scan script file for WATCH commands", "script_file", scriptFile, "error", err)
-			os.Exit(1)
+			utils.FileSystemError("scan script file for WATCH commands", scriptFile, err)
 		}
 
 		// Validate training data is available if WATCH commands are present
 		if hasWatchCommands {
 			if err := validateWatchRequirements(); err != nil {
-				logging.Error("WATCH command requirements validation failed",
-					"script_file", scriptFile,
-					"error", err,
-					"solution", "Use --training-data flag or set in config file")
-				os.Exit(1)
+				utils.FatalErrorWithCode(err, "WATCH command requirements validation failed", utils.ExitCodeValidation)
 			}
 
 			// Additional validation for WATCH commands and remote connections
@@ -201,7 +195,7 @@ Script file example:
 		script.PerformWatchCheckFunc = performWatchCheck
 
 		// Check if TUI mode is requested
-		if useTUI {
+		if useTUI || useEnhancedTUI {
 			// Parse script file for TUI
 			lines, err := parseScriptFile(scriptFile)
 			if err != nil {
@@ -209,12 +203,21 @@ Script file example:
 				os.Exit(1)
 			}
 
-			// Create and run TUI
-			model := NewScriptTUIModel(vmid, client, scriptFile, lines)
-			p := tea.NewProgram(model, tea.WithAltScreen())
-			if _, err := p.Run(); err != nil {
-				logging.Error("TUI execution failed", "vmid", vmid, "script_file", scriptFile, "error", err)
-				os.Exit(1)
+			// Create and run TUI (enhanced or standard)
+			if useEnhancedTUI {
+				model := NewEnhancedScriptTUIModel(vmid, client, scriptFile, lines)
+				p := tea.NewProgram(model, tea.WithAltScreen())
+				if _, err := p.Run(); err != nil {
+					logging.Error("Enhanced TUI execution failed", "vmid", vmid, "script_file", scriptFile, "error", err)
+					os.Exit(1)
+				}
+			} else {
+				model := NewScriptTUIModel(vmid, client, scriptFile, lines)
+				p := tea.NewProgram(model, tea.WithAltScreen())
+				if _, err := p.Run(); err != nil {
+					logging.Error("TUI execution failed", "vmid", vmid, "script_file", scriptFile, "error", err)
+					os.Exit(1)
+				}
 			}
 			return
 		}
@@ -655,7 +658,8 @@ echo "Script execution completed"
 		fmt.Printf("# Custom comment/control characters:\n")
 		fmt.Printf("qmp script 106 my-script.txt --comment-char \"%%\" --control-char \"<!\"\n\n")
 		fmt.Printf("# Interactive TUI mode:\n")
-		fmt.Printf("qmp script 106 my-script.txt training.json --tui\n\n")
+		fmt.Printf("qmp script 106 my-script.txt training.json --tui\n")
+		fmt.Printf("qmp script 106 my-script.txt training.json --enhanced-tui  # Full-screen OCR viewer\n\n")
 		fmt.Printf("=== Key Features ===\n")
 		fmt.Printf("• Most lines typed directly to VM (followed by Enter)\n")
 		fmt.Printf("• <# WATCH \"text\" TIMEOUT 30s - Wait for screen text (requires training data)\n")
@@ -677,6 +681,7 @@ func init() {
 	scriptCmd.Flags().StringVar(&commentStr, "comment-char", "#", "character that starts comment lines")
 	scriptCmd.Flags().StringVar(&controlStr, "control-char", "<#", "prefix for control commands")
 	scriptCmd.Flags().BoolVar(&useTUI, "tui", false, "use interactive TUI mode for script execution")
+	scriptCmd.Flags().BoolVar(&useEnhancedTUI, "enhanced-tui", false, "use enhanced TUI with full-screen OCR viewer")
 
 	// WATCH command flags
 	scriptCmd.Flags().IntVarP(&scriptOCRConfig.Columns, "columns", "c", qmp.DEFAULT_WIDTH, "screen width for WATCH command OCR")

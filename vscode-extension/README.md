@@ -74,6 +74,9 @@ The following patterns were automatically extracted from the parser:
 #### Composition
 - **includeRegex**: Include directive: include "script.txt"
 
+#### Conditionals
+- **elseRegex**: Else directive: else
+
 #### Control
 - **consoleRegex**: Console switching: console 2
 - **exitRegex**: Exit command: exit 1
@@ -84,20 +87,8 @@ The following patterns were automatically extracted from the parser:
 - **directiveRegex**: Directive patterns: <something> but not \<something>
 - **escapedDirectiveRegex**: Escaped directive patterns: \<something>
 
-#### Keys
-- **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
-
-#### Loops
-- **repeatRegex**: Repeat directive: repeat 5
-- **retryRegex**: Retry directive: retry 3
-- **whileFoundRegex**: While-found loop: while-found "text" 30s poll 1s
-- **whileNotFoundRegex**: While-not-found loop: while-not-found "text" 30s poll 1s
-
-#### Structure
-- **emptyLineRegex**: Empty or whitespace-only lines
-
-#### Conditionals
-- **elseRegex**: Else directive: else
+#### Variables
+- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
 
 #### Debugging
 - **screenshotRegex**: Screenshot directive: screenshot "filename.png"
@@ -106,6 +97,15 @@ The following patterns were automatically extracted from the parser:
 - **endFunctionRegex**: End function: end-function
 - **functionCallRegex**: Function call: call function_name args...
 - **functionDefRegex**: Function definition: function name
+
+#### Keys
+- **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
+
+#### Loops
+- **repeatRegex**: Repeat directive: repeat 5
+- **retryRegex**: Retry directive: retry 3
+- **whileFoundRegex**: While-found loop: while-found "text" 30s poll 1s
+- **whileNotFoundRegex**: While-not-found loop: while-not-found "text" 30s poll 1s
 
 #### Misc
 - **caseRegex**: Script2 pattern: caseRegex
@@ -117,8 +117,8 @@ The following patterns were automatically extracted from the parser:
 - **setRegex**: Script2 pattern: setRegex
 - **switchRegex**: Script2 pattern: switchRegex
 
-#### Variables
-- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
+#### Structure
+- **emptyLineRegex**: Empty or whitespace-only lines
 
 
 ## Development

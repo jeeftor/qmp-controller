@@ -97,11 +97,13 @@ type DebugState struct {
 // Debugger handles script debugging functionality
 type Debugger struct {
 	state     *DebugState
-	script    *Script
-	executor  *Executor
-	logger    *logging.ContextualLogger
-	tui       *DebugTUI
-	enabled   bool
+	script      *Script
+	executor    *Executor
+	logger      *logging.ContextualLogger
+	tui         *DebugTUI
+	enhancedTUI *EnhancedDebugTUI
+	useEnhanced bool
+	enabled     bool
 }
 
 // NewDebugger creates a new debugger instance
@@ -116,11 +118,23 @@ func NewDebugger(script *Script, executor *Executor) *Debugger {
 			CurrentWatchOperation: nil,
 			WatchHistory:          make([]WatchHistoryEntry, 0),
 		},
-		script:   script,
-		executor: executor,
-		logger:   logging.NewContextualLogger(executor.context.VMID, "script2_debugger"),
-		enabled:  false,
+		script:      script,
+		executor:    executor,
+		logger:      logging.NewContextualLogger(executor.context.VMID, "script2_debugger"),
+		useEnhanced: false, // Default to standard TUI
+		enabled:     false,
 	}
+}
+
+// EnableEnhancedTUI enables the enhanced TUI mode for debugging
+func (d *Debugger) EnableEnhancedTUI() {
+	d.useEnhanced = true
+	d.logger.Info("Enhanced TUI mode enabled")
+}
+
+// IsEnhancedTUIEnabled returns true if enhanced TUI mode is enabled
+func (d *Debugger) IsEnhancedTUIEnabled() bool {
+	return d.useEnhanced
 }
 
 // Enable enables debugging with the specified mode
@@ -130,7 +144,11 @@ func (d *Debugger) Enable(mode DebugMode) {
 	d.logger.Info("Debugger enabled", "mode", d.debugModeString(mode))
 
 	if mode == DebugModeInteractive {
-		d.tui = NewDebugTUI(d)
+		if d.useEnhanced {
+			d.enhancedTUI = NewEnhancedDebugTUI(d)
+		} else {
+			d.tui = NewDebugTUI(d)
+		}
 	}
 }
 
@@ -203,6 +221,14 @@ func (d *Debugger) HandleBreak(lineNumber int, line ParsedLine) (DebugAction, er
 
 // handleInteractiveBreak handles breaks in interactive TUI mode
 func (d *Debugger) handleInteractiveBreak(line ParsedLine) (DebugAction, error) {
+	// Use enhanced TUI if enabled
+	if d.useEnhanced {
+		if d.enhancedTUI == nil {
+			d.enhancedTUI = NewEnhancedDebugTUI(d)
+		}
+		return d.runEnhancedTUI(line)
+	}
+
 	if d.tui == nil {
 		d.tui = NewDebugTUI(d)
 	}
@@ -247,6 +273,54 @@ func (d *Debugger) handleInteractiveBreak(line ParsedLine) (DebugAction, error) 
 
 	d.logger.Warn("Unexpected TUI model type, continuing execution")
 	return DebugActionContinue, nil
+}
+
+// runEnhancedTUI runs the enhanced debug TUI
+func (d *Debugger) runEnhancedTUI(line ParsedLine) (DebugAction, error) {
+	d.logger.Info("Starting enhanced TUI session", "line", d.state.CurrentLine)
+	fmt.Printf("\n🔍 Enhanced Interactive Debugging (line %d)\n", d.state.CurrentLine)
+	fmt.Printf("   Line: %s\n", line.Content)
+	fmt.Printf("   Initializing Enhanced TUI with OCR features...\n")
+
+	// Try enhanced TUI with SSH compatibility fallbacks
+	action, err := d.enhancedTUI.Run()
+	if err != nil {
+		d.logger.Error("Enhanced TUI failed, falling back to standard TUI", "error", err)
+		fmt.Printf("   ⚠️  Enhanced TUI failed: %v\n", err)
+		fmt.Printf("   🔄 Falling back to standard TUI...\n")
+
+		// Fallback to standard TUI
+		if d.tui == nil {
+			d.tui = NewDebugTUI(d)
+		}
+
+		// Standard TUI fallback logic
+		var program *tea.Program
+		var finalModel tea.Model
+
+		program = tea.NewProgram(d.tui.InitialModel(), tea.WithAltScreen())
+		finalModel, err = program.Run()
+
+		if err != nil {
+			program = tea.NewProgram(d.tui.InitialModel())
+			finalModel, err = program.Run()
+
+			if err != nil {
+				// Ultimate fallback to console mode
+				fmt.Printf("   📱 All TUI modes failed, falling back to console debugging...\n")
+				return d.handleConsoleBreak(line)
+			}
+		}
+
+		if model, ok := finalModel.(*debugTUIModel); ok {
+			return model.lastAction, nil
+		}
+
+		return DebugActionContinue, nil
+	}
+
+	d.logger.Info("Enhanced TUI session completed", "action", action)
+	return action, nil
 }
 
 // handleConsoleBreak handles breaks in console mode

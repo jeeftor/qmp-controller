@@ -138,3 +138,59 @@ func (m *MultiError) Check() {
 		FatalError(m, m.Context)
 	}
 }
+
+// Additional consolidated error handling functions to replace direct os.Exit(1) calls
+
+// StandardError handles common error patterns with consistent formatting
+func StandardError(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
+	os.Exit(int(ExitCodeValidation))
+}
+
+// StandardErrorf is an alias for StandardError for consistency
+func StandardErrorf(format string, args ...interface{}) {
+	StandardError(format, args...)
+}
+
+// RequiredParameterError handles missing required parameter errors with consistent messaging
+func RequiredParameterError(paramName string, envVar string) {
+	if envVar != "" {
+		StandardError("%s is required: provide as argument or set %s environment variable", paramName, envVar)
+	} else {
+		StandardError("%s is required", paramName)
+	}
+}
+
+// ValidationErrorf handles validation errors with format string
+func ValidationErrorf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
+	os.Exit(int(ExitCodeValidation))
+}
+
+// ProcessingError handles file/data processing errors
+func ProcessingError(operation string, err error) {
+	fmt.Fprintf(os.Stderr, "Error %s: %v\n", operation, err)
+	os.Exit(int(ExitCodeGeneral))
+}
+
+// ConfigurationError handles configuration validation errors
+func ConfigurationError(component string, issue string) {
+	fmt.Fprintf(os.Stderr, "Error: %s %s\n", component, issue)
+	os.Exit(int(ExitCodeValidation))
+}
+
+// CropFormatError handles crop parameter format errors
+func CropFormatError(paramType string, expected string) {
+	fmt.Printf("Error: Crop %s must be in the format '%s' (e.g., '5:20')\n", paramType, expected)
+	os.Exit(int(ExitCodeValidation))
+}
+
+// RangeValidationError handles range validation errors with detailed context
+func RangeValidationError(paramName string, startVal, endVal, maxVal int, constraint string) {
+	logging.Error("Range validation failed",
+		paramName+"_start", startVal,
+		paramName+"_end", endVal,
+		"max_"+paramName, maxVal,
+		"constraint", constraint)
+	os.Exit(int(ExitCodeValidation))
+}

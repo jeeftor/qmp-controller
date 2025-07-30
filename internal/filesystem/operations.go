@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jeeftor/qmp-controller/internal/logging"
 	"github.com/jeeftor/qmp-controller/internal/utils"
@@ -179,4 +180,138 @@ func GetAbsolutePath(path string) (string, error) {
 	}
 
 	return filepath.Abs(path)
+}
+
+// StatWithLogging gets file statistics and logs file size and metadata
+func StatWithLogging(filePath string, operation string) (os.FileInfo, error) {
+	start := time.Now()
+	stat, err := os.Stat(filePath)
+
+	if err != nil {
+		logging.Error("File stat operation failed",
+			"file_path", filePath,
+			"operation", operation,
+			"error", err,
+			"duration", time.Since(start))
+		return nil, err
+	}
+
+	logging.Debug("File stat operation completed",
+		"file_path", filePath,
+		"operation", operation,
+		"size_bytes", stat.Size(),
+		"mod_time", stat.ModTime(),
+		"is_dir", stat.IsDir(),
+		"duration", time.Since(start))
+
+	return stat, nil
+}
+
+// StatWithMetrics gets file statistics and logs metrics for performance monitoring
+func StatWithMetrics(filePath string, operation string) (os.FileInfo, error) {
+	start := time.Now()
+	stat, err := os.Stat(filePath)
+	duration := time.Since(start)
+
+	if err != nil {
+		logging.LogPerformance("file_stat", "", map[string]interface{}{
+			"file_path": filePath,
+			"operation": operation,
+			"success":   false,
+			"duration":  duration,
+			"error":     err.Error(),
+		})
+		return nil, err
+	}
+
+	logging.LogPerformance("file_stat", "", map[string]interface{}{
+		"file_path":  filePath,
+		"operation":  operation,
+		"success":    true,
+		"size_bytes": stat.Size(),
+		"duration":   duration,
+	})
+
+	return stat, nil
+}
+
+// ValidateOutputFile validates that an output file path is valid and writable
+func ValidateOutputFile(outputFile string, paramName string, envVar string) error {
+	if outputFile == "" {
+		if envVar != "" {
+			return fmt.Errorf("%s is required: provide as argument or set %s environment variable", paramName, envVar)
+		}
+		return fmt.Errorf("%s is required", paramName)
+	}
+
+	// Ensure the directory exists
+	if err := EnsureDirectoryForFile(outputFile); err != nil {
+		return fmt.Errorf("cannot create directory for %s '%s': %w", paramName, outputFile, err)
+	}
+
+	// Check if file exists and is writable, or if it can be created
+	if _, err := os.Stat(outputFile); err == nil {
+		// File exists, check if it's writable
+		if file, err := os.OpenFile(outputFile, os.O_WRONLY, 0); err != nil {
+			return fmt.Errorf("%s '%s' exists but is not writable: %w", paramName, outputFile, err)
+		} else {
+			file.Close()
+		}
+	} else if !os.IsNotExist(err) {
+		// Some other error occurred
+		return fmt.Errorf("cannot access %s '%s': %w", paramName, outputFile, err)
+	}
+	// If file doesn't exist, that's okay - we'll create it
+
+	return nil
+}
+
+// ValidateOutputFileWithExit validates output file and exits on error
+func ValidateOutputFileWithExit(outputFile string, paramName string, envVar string) {
+	if err := ValidateOutputFile(outputFile, paramName, envVar); err != nil {
+		utils.ValidationError(err)
+	}
+}
+
+// ValidateInputFile validates that an input file exists and is readable
+func ValidateInputFile(inputFile string, paramName string, envVar string) error {
+	if inputFile == "" {
+		if envVar != "" {
+			return fmt.Errorf("%s is required: provide as argument or set %s environment variable", paramName, envVar)
+		}
+		return fmt.Errorf("%s is required", paramName)
+	}
+
+	// Check if file exists and is readable
+	if _, err := os.Stat(inputFile); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s '%s' does not exist", paramName, inputFile)
+		}
+		return fmt.Errorf("cannot access %s '%s': %w", paramName, inputFile, err)
+	}
+
+	// Check if file is readable
+	if file, err := os.Open(inputFile); err != nil {
+		return fmt.Errorf("%s '%s' is not readable: %w", paramName, inputFile, err)
+	} else {
+		file.Close()
+	}
+
+	return nil
+}
+
+// ValidateInputFileWithExit validates input file and exits on error
+func ValidateInputFileWithExit(inputFile string, paramName string, envVar string) {
+	if err := ValidateInputFile(inputFile, paramName, envVar); err != nil {
+		utils.ValidationError(err)
+	}
+}
+
+// GetFileSizeWithLogging gets file size and logs the operation
+func GetFileSizeWithLogging(filePath string, operation string) (int64, error) {
+	stat, err := StatWithLogging(filePath, operation)
+	if err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
 }

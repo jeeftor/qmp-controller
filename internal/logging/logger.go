@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,15 +33,75 @@ type ColorTextHandler struct {
 	w io.Writer
 }
 
+// PlainTextHandler is a handler for file output without colors
+type PlainTextHandler struct {
+	w io.Writer
+}
+
+// MultiHandler writes to multiple handlers simultaneously (console + file)
+type MultiHandler struct {
+	handlers []slog.Handler
+}
+
 // NewColorTextHandler creates a new ColorTextHandler
 func NewColorTextHandler(w io.Writer) *ColorTextHandler {
 	return &ColorTextHandler{w: w}
 }
 
+// NewPlainTextHandler creates a new PlainTextHandler for file output
+func NewPlainTextHandler(w io.Writer) *PlainTextHandler {
+	return &PlainTextHandler{w: w}
+}
+
+// NewMultiHandler creates a new MultiHandler that writes to multiple handlers
+func NewMultiHandler(handlers ...slog.Handler) *MultiHandler {
+	return &MultiHandler{handlers: handlers}
+}
+
 // Custom log level for TRACE
 const LevelTrace = slog.Level(-8)
 
-// Handle handles the log record
+// Handle handles the log record for PlainTextHandler (file output)
+func (h *PlainTextHandler) Handle(ctx context.Context, r slog.Record) error {
+	var levelText string
+	switch r.Level {
+	case LevelTrace:
+		levelText = "TRACE"
+	case slog.LevelDebug:
+		levelText = "DEBUG"
+	case slog.LevelInfo:
+		levelText = "INFO"
+	case slog.LevelWarn:
+		levelText = "WARN"
+	case slog.LevelError:
+		levelText = "ERROR"
+	default:
+		levelText = r.Level.String()
+	}
+
+	// Format timestamp
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+
+	// Format the message
+	msg := r.Message
+
+	// Build attributes string
+	var attrs string
+	r.Attrs(func(a slog.Attr) bool {
+		// Skip the source attribute
+		if a.Key == "source" {
+			return true
+		}
+		attrs += " " + a.Key + "=" + formatPlainAttrValue(a.Value)
+		return true
+	})
+
+	// Write the log line with timestamp for file output
+	_, err := fmt.Fprintf(h.w, "%s [%s] %s%s\n", timestamp, levelText, msg, attrs)
+	return err
+}
+
+// Handle handles the log record for ColorTextHandler (console output)
 func (h *ColorTextHandler) Handle(ctx context.Context, r slog.Record) error {
 	var levelText string
 	switch r.Level {
@@ -77,6 +138,33 @@ func (h *ColorTextHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Write the log line with a carriage return at the beginning to ensure clean output
 	_, err := fmt.Fprintf(h.w, "\r%s %s%s\n", levelText, msg, attrs)
 	return err
+}
+
+// formatPlainAttrValue formats a slog.Value as a plain string for file output
+func formatPlainAttrValue(v slog.Value) string {
+	switch v.Kind() {
+	case slog.KindString:
+		return fmt.Sprintf("\"%s\"", v.String())
+	case slog.KindInt64:
+		return fmt.Sprintf("%d", v.Int64())
+	case slog.KindUint64:
+		return fmt.Sprintf("%d", v.Uint64())
+	case slog.KindFloat64:
+		return fmt.Sprintf("%.2f", v.Float64())
+	case slog.KindBool:
+		if v.Bool() {
+			return "true"
+		}
+		return "false"
+	case slog.KindDuration:
+		return v.Duration().String()
+	case slog.KindTime:
+		return v.Time().Format("15:04:05.000")
+	case slog.KindAny:
+		return fmt.Sprintf("%v", v.Any())
+	default:
+		return v.String()
+	}
 }
 
 // formatAttrValue formats a slog.Value as a string with proper styling
@@ -122,6 +210,56 @@ func (h *ColorTextHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return level >= currentLevel
 }
 
+// WithAttrs returns a new handler with the given attributes for PlainTextHandler
+func (h *PlainTextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h
+}
+
+// WithGroup returns a new handler with the given group for PlainTextHandler
+func (h *PlainTextHandler) WithGroup(name string) slog.Handler {
+	return h
+}
+
+// Enabled reports whether the handler handles records at the given level for PlainTextHandler
+func (h *PlainTextHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= currentLevel
+}
+
+// MultiHandler methods
+func (h *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, handler := range h.handlers {
+		if err := handler.Handle(ctx, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *MultiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newHandlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		newHandlers[i] = handler.WithAttrs(attrs)
+	}
+	return &MultiHandler{handlers: newHandlers}
+}
+
+func (h *MultiHandler) WithGroup(name string) slog.Handler {
+	newHandlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		newHandlers[i] = handler.WithGroup(name)
+	}
+	return &MultiHandler{handlers: newHandlers}
+}
+
+func (h *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range h.handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
 // parseLogLevel converts string log level to slog.Level
 func parseLogLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
@@ -149,6 +287,43 @@ func InitWithLevel(level string) {
 	slog.SetDefault(logger)
 
 	Debug("Logging initialized", "level", level, "parsed_level", currentLevel)
+}
+
+// InitWithLevelAndFile initializes the logger with the specified log level and file output
+func InitWithLevelAndFile(level string, logFile string) {
+	currentLevel = parseLogLevel(level)
+
+	// Ensure the directory for the log file exists
+	logDir := filepath.Dir(logFile)
+	if logDir != "." && logDir != "" {
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			// If we can't create the directory, fall back to console-only logging
+			InitWithLevel(level)
+			Error("Failed to create log file directory, falling back to console logging", "error", err, "log_file", logFile)
+			return
+		}
+	}
+
+	// Open the log file for writing (create or append)
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		// If we can't open the file, fall back to console-only logging
+		InitWithLevel(level)
+		Error("Failed to open log file, falling back to console logging", "error", err, "log_file", logFile)
+		return
+	}
+
+	// Create handlers for both console (with colors) and file (plain text)
+	consoleHandler := NewColorTextHandler(os.Stdout)
+	fileHandler := NewPlainTextHandler(file)
+
+	// Create a multi-handler that writes to both
+	multiHandler := NewMultiHandler(consoleHandler, fileHandler)
+
+	logger = slog.New(multiHandler)
+	slog.SetDefault(logger)
+
+	Debug("Logging initialized with file output", "level", level, "parsed_level", currentLevel, "log_file", logFile)
 }
 
 // Init initializes the logger with the specified debug level (backward compatibility)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/jeeftor/qmp-controller/internal/args"
@@ -47,13 +48,23 @@ This command captures a screenshot from the specified VM and runs interactive
 training mode to help you build training data.
 
 The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
-The output file can be provided as an argument or set via the QMP_OUTPUT_FILE environment variable.
+The output file is optional. If not provided, it will use the default training data file
+~/.qmp_training_data.json, or check the QMP_OUTPUT_FILE environment variable.
+
+SAFETY: If the default training data file already exists, you must use the --update flag
+to modify it, preventing accidental overwriting of existing training data.
 
 The resolution can be set using --res (e.g., '160x50') or individually with --columns
 and --rows. If --res is provided, it takes precedence over --columns and --rows.
 
 Examples:
-  # Explicit arguments
+  # Use default training data file (only works if file doesn't exist yet)
+  qmp train-ocr vm 106
+
+  # Update existing default training data file
+  qmp train-ocr vm 106 --update
+
+  # Explicit output file
   qmp train-ocr vm 106 training-data.json
 
   # Using environment variables
@@ -64,8 +75,8 @@ Examples:
   # Train OCR with custom resolution
   qmp train-ocr vm 106 training-data.json --res 160x50
 
-  # Update existing training data
-  qmp train-ocr vm 106 training-data.json --update`,
+  # Update existing training data (uses default file if none specified)
+  qmp train-ocr vm 106 --update`,
 	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, cmdArgs []string) {
 		// Parse arguments using simple argument parser for training
@@ -75,15 +86,38 @@ Examples:
 		// Extract VM ID
 		vmid := parsedArgs.VMID
 
-		// For training output file, check remaining args or environment
+		// For training output file, check remaining args, environment, or use default
 		var outputFile string
+		usingDefault := false
 		if len(parsedArgs.RemainingArgs) > 0 {
 			outputFile = parsedArgs.RemainingArgs[0]
 		} else {
 			// Try environment variable QMP_OUTPUT_FILE
 			outputFile = os.Getenv("QMP_OUTPUT_FILE")
 			if outputFile == "" {
-				utils.ValidationError(fmt.Errorf("output file is required: provide as argument or set QMP_OUTPUT_FILE environment variable"))
+				// Use default training data file
+				var err error
+				outputFile, err = getDefaultTrainingDataPath()
+				if err != nil {
+					utils.ValidationError(fmt.Errorf("could not determine default training data file path: %v", err))
+				}
+				usingDefault = true
+			}
+		}
+
+		// Print message about using default training data file
+		if usingDefault {
+			logging.UserInfof("📝 USING DEFAULT TRAINING DATA FILE: %s", outputFile)
+			logging.UserInfof("   You can specify a custom file: qmp train-ocr vm %s <custom-file>", vmid)
+			logging.UserInfo("   Or set environment variable: export QMP_OUTPUT_FILE=<custom-file>")
+
+			// Safety check: if default file exists and --update not specified, require explicit update flag
+			if filesystem.CheckFileExists(outputFile) == nil && !updateExisting {
+				logging.UserError("⚠️  ERROR: Default training data file already exists!")
+				logging.UserErrorf("   File: %s", outputFile)
+				logging.UserErrorf("   To update existing training data, use: qmp train-ocr vm %s --update", vmid)
+				logging.UserErrorf("   To use a new file, specify: qmp train-ocr vm %s <new-file>", vmid)
+				utils.ValidationError(fmt.Errorf("existing default training data file requires --update flag to modify"))
 			}
 		}
 
@@ -99,11 +133,23 @@ var trainOcrFileCmd = &cobra.Command{
 This command processes the specified image file and runs interactive
 training mode to help you build training data.
 
+The output file is optional. If not provided, the default training data file
+~/.qmp_training_data.json will be used.
+
+SAFETY: If the default training data file already exists, you must use the --update flag
+to modify it, preventing accidental overwriting of existing training data.
+
 The resolution can be set using --res (e.g., '160x50') or individually with --columns
 and --rows. If --res is provided, it takes precedence over --columns and --rows.
 
 Examples:
-  # Train OCR from image file with default resolution
+  # Train OCR from image file (only works if default file doesn't exist yet)
+  qmp train-ocr file training-image.ppm
+
+  # Update existing default training data file
+  qmp train-ocr file training-image.ppm --update
+
+  # Train OCR from image file with custom output file
   qmp train-ocr file training-image.ppm training-data.json
 
   # Train OCR from file with custom resolution
@@ -114,13 +160,51 @@ Examples:
 
   # Update existing training data
   qmp train-ocr file training-image.ppm training-data.json --update`,
-	Args: cobra.ExactArgs(2),
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, cmdArgs []string) {
 		inputFile := cmdArgs[0]
-		outputFile := cmdArgs[1]
+
+		// Handle optional output file with default
+		var outputFile string
+		usingDefault := false
+		if len(cmdArgs) > 1 {
+			outputFile = cmdArgs[1]
+		} else {
+			// Use default training data file
+			var err error
+			outputFile, err = getDefaultTrainingDataPath()
+			if err != nil {
+				utils.ValidationError(fmt.Errorf("could not determine default training data file path: %v", err))
+			}
+			usingDefault = true
+		}
+
+		// Print message about using default training data file
+		if usingDefault {
+			logging.UserInfof("📝 USING DEFAULT TRAINING DATA FILE: %s", outputFile)
+			logging.UserInfof("   You can specify a custom file: qmp train-ocr file %s <custom-file>", inputFile)
+
+			// Safety check: if default file exists and --update not specified, require explicit update flag
+			if filesystem.CheckFileExists(outputFile) == nil && !updateExisting {
+				logging.UserError("⚠️  ERROR: Default training data file already exists!")
+				logging.UserErrorf("   File: %s", outputFile)
+				logging.UserErrorf("   To update existing training data, use: qmp train-ocr file %s --update", inputFile)
+				logging.UserErrorf("   To use a new file, specify: qmp train-ocr file %s <new-file>", inputFile)
+				utils.ValidationError(fmt.Errorf("existing default training data file requires --update flag to modify"))
+			}
+		}
 
 		runTrainingFlow(inputFile, outputFile, false)
 	},
+}
+
+// getDefaultTrainingDataPath returns the default path for training data file
+func getDefaultTrainingDataPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not determine home directory: %v", err)
+	}
+	return filepath.Join(homeDir, ".qmp_training_data.json"), nil
 }
 
 func runTrainingFlow(input, outputFile string, isVM bool) {
@@ -351,6 +435,6 @@ func init() {
 	for _, cmd := range []*cobra.Command{trainOcrVmCmd, trainOcrFileCmd} {
 		cmd.Flags().IntVarP(&trainColumns, "columns", "c", constants.DefaultScreenWidth, "Number of columns in the terminal")
 		cmd.Flags().IntVarP(&trainRows, "rows", "r", constants.DefaultScreenHeight, "Number of rows in the terminal")
-		cmd.Flags().BoolVar(&updateExisting, "update", false, "Update existing training data if the file exists")
+		cmd.Flags().BoolVar(&updateExisting, "update", false, "Update existing training data (required when default file exists)")
 	}
 }

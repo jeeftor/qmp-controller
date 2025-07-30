@@ -108,10 +108,10 @@ jetbrains-clean:
 	docker rmi jetbrains-plugin-builder 2>/dev/null || true
 
 scp: clean vscode-extension build-amd
-	scp ./dist/qmp-controller-amd64 pve1:~/qmp-controller &
-	scp ./dist/qmp-controller-amd64 pve2:~/qmp-controller &
-	scp ./dist/qmp-controller-amd64 pve3:~/qmp-controller &
-	scp ./dist/qmp-controller-amd64 pve4:~/qmp-controller &
+	scp ./dist/qmp-controller-amd64 pve1:~/qmp
+	scp ./dist/qmp-controller-amd64 pve2:~/qmp
+	scp ./dist/qmp-controller-amd64 pve3:~/qmp
+	scp ./dist/qmp-controller-amd64 pve4:~/qmp
 	cp ./dist/qmp-controller-amd64  /Users/jstein/devel/n2cx/secureUSB/qmp &
 	cp ./vscode-extension/qmp-script2-*.vsix /Volumes/SecureUSB/dev/script2.vsix &
 	cp ./dist/qmp-controller-amd64  /Volumes/SecureUSB/dev/qmp	&
