@@ -1,4 +1,7 @@
 {
+  "activationEvents": [
+    "onLanguage:qmp-script2"
+  ],
   "categories": [
     "Programming Languages"
   ],
@@ -28,8 +31,8 @@
     "themes": [
       {
         "label": "QMP Script2 Rainbow",
-        "uiTheme": "vs-dark",
-        "path": "./themes/qmp-script2-rainbow-theme.json"
+        "path": "./themes/qmp-script2-rainbow-theme.json",
+        "uiTheme": "vs-dark"
       }
     ]
   },
@@ -44,10 +47,6 @@
   "engines": {
     "vscode": "^1.60.0"
   },
-  "main": "./out/extension.js",
-  "activationEvents": [
-    "onLanguage:qmp-script2"
-  ],
   "keywords": [
     "qmp",
     "script2",
@@ -56,6 +55,7 @@
     "syntax"
   ],
   "license": "MIT",
+  "main": "./out/extension.js",
   "name": "qmp-script2",
   "publisher": "qmp-controller",
   "repository": {
@@ -64,9 +64,9 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "npm run compile && vsce package",
-    "publish": "npm run compile && vsce publish"
+    "package": "npm run compile \u0026\u0026 vsce package",
+    "publish": "npm run compile \u0026\u0026 vsce publish",
+    "watch": "tsc -watch -p ./"
   },
-  "version": "0.0.2-10-gd2c60cb-dev"
+  "version": "0.0.2-11-g93b387c-dev"
 }

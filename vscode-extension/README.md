@@ -68,18 +68,15 @@ The grammar is automatically synchronized with parser changes to ensure accuracy
 The following patterns were automatically extracted from the parser:
 
 
-#### Comments
-- **commentRegex**: Comment lines starting with #
-
-#### Conditionals
-- **elseRegex**: Else directive: else
-
-#### Debugging
-- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
+#### Composition
+- **includeRegex**: Include directive: include "script.txt"
 
 #### Directives
 - **directiveRegex**: Directive patterns: <something> but not \<something>
 - **escapedDirectiveRegex**: Escaped directive patterns: \<something>
+
+#### Keys
+- **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
 
 #### Loops
 - **repeatRegex**: Repeat directive: repeat 5
@@ -103,8 +100,11 @@ The following patterns were automatically extracted from the parser:
 #### Variables
 - **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
 
-#### Composition
-- **includeRegex**: Include directive: include "script.txt"
+#### Comments
+- **commentRegex**: Comment lines starting with #
+
+#### Conditionals
+- **elseRegex**: Else directive: else
 
 #### Control
 - **consoleRegex**: Console switching: console 2
@@ -112,13 +112,13 @@ The following patterns were automatically extracted from the parser:
 - **waitRegex**: Wait delay: wait 5s
 - **watchRegex**: Watch patterns: watch "text" 30s
 
+#### Debugging
+- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
+
 #### Functions
 - **endFunctionRegex**: End function: end-function
 - **functionCallRegex**: Function call: call function_name args...
 - **functionDefRegex**: Function definition: function name
-
-#### Keys
-- **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
 
 
 ## Development

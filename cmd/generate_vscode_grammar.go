@@ -726,6 +726,8 @@ func generatePackageJSON(outputDir string) error {
 		"description":  "Syntax highlighting for QMP Script2 automation files",
 		"version":      version,
 		"publisher":    "qmp-controller",
+		"main":         "./out/extension.js",
+		"activationEvents": []string{"onLanguage:qmp-script2"},
 		"engines": map[string]string{
 			"vscode": "^1.60.0",
 		},
@@ -747,6 +749,13 @@ func generatePackageJSON(outputDir string) error {
 					"path":       "./syntaxes/qmp-script2.tmLanguage.json",
 				},
 			},
+			"themes": []map[string]interface{}{
+				{
+					"label":   "QMP Script2 Rainbow",
+					"uiTheme": "vs-dark",
+					"path":    "./themes/qmp-script2-rainbow-theme.json",
+				},
+			},
 		},
 		"repository": map[string]string{
 			"type": "git",
@@ -754,12 +763,16 @@ func generatePackageJSON(outputDir string) error {
 		},
 		"license": "MIT",
 		"scripts": map[string]string{
-			"compile": "echo 'No compilation needed for grammar-only extension'",
-			"package": "vsce package",
-			"publish": "vsce publish",
+			"compile": "tsc -p ./",
+			"watch":   "tsc -watch -p ./",
+			"package": "npm run compile && vsce package",
+			"publish": "npm run compile && vsce publish",
 		},
 		"devDependencies": map[string]string{
-			"vsce": "^2.15.0",
+			"@types/node":   "^18.0.0",
+			"@types/vscode": "^1.60.0",
+			"typescript":    "^5.0.0",
+			"vsce":          "^2.15.0",
 		},
 	}
 
