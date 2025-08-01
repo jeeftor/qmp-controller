@@ -68,12 +68,35 @@ The grammar is automatically synchronized with parser changes to ensure accuracy
 The following patterns were automatically extracted from the parser:
 
 
-#### Composition
-- **includeRegex**: Include directive: include "script.txt"
+#### Conditionals
+- **elseRegex**: Else directive: else
+
+#### Control
+- **consoleRegex**: Console switching: console 2
+- **exitRegex**: Exit command: exit 1
+- **waitRegex**: Wait delay: wait 5s
+- **watchRegex**: Watch patterns: watch "text" 30s
+
+#### Debugging
+- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
 
 #### Directives
 - **directiveRegex**: Directive patterns: <something> but not \<something>
 - **escapedDirectiveRegex**: Escaped directive patterns: \<something>
+
+#### Functions
+- **endFunctionRegex**: End function: end-function
+- **functionCallRegex**: Function call: call function_name args...
+- **functionDefRegex**: Function definition: function name
+
+#### Structure
+- **emptyLineRegex**: Empty or whitespace-only lines
+
+#### Variables
+- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
+
+#### Comments
+- **commentRegex**: Comment lines starting with #
 
 #### Keys
 - **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
@@ -94,31 +117,8 @@ The following patterns were automatically extracted from the parser:
 - **setRegex**: Script2 pattern: setRegex
 - **switchRegex**: Script2 pattern: switchRegex
 
-#### Structure
-- **emptyLineRegex**: Empty or whitespace-only lines
-
-#### Variables
-- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
-
-#### Comments
-- **commentRegex**: Comment lines starting with #
-
-#### Conditionals
-- **elseRegex**: Else directive: else
-
-#### Control
-- **consoleRegex**: Console switching: console 2
-- **exitRegex**: Exit command: exit 1
-- **waitRegex**: Wait delay: wait 5s
-- **watchRegex**: Watch patterns: watch "text" 30s
-
-#### Debugging
-- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
-
-#### Functions
-- **endFunctionRegex**: End function: end-function
-- **functionCallRegex**: Function call: call function_name args...
-- **functionDefRegex**: Function definition: function name
+#### Composition
+- **includeRegex**: Include directive: include "script.txt"
 
 
 ## Development

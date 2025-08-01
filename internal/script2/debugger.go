@@ -92,6 +92,11 @@ type DebugState struct {
 	LastSearchFound        bool                   // Whether last search was successful
 	CurrentWatchOperation  *WatchOperation        // Active watch operation
 	WatchHistory           []WatchHistoryEntry    // History of watch operations
+
+	// TUI state persistence
+	DualPaneMode           bool                   // Whether dual pane mode is enabled
+	CurrentView            int                    // Current view (enhancedDebugView as int)
+	SecondView             int                    // Second view for dual pane mode
 }
 
 // Debugger handles script debugging functionality
@@ -117,6 +122,11 @@ func NewDebugger(script *Script, executor *Executor) *Debugger {
 			LastOCRResult:         make([]string, 0),
 			CurrentWatchOperation: nil,
 			WatchHistory:          make([]WatchHistoryEntry, 0),
+
+			// Initialize TUI state
+			DualPaneMode:          false,
+			CurrentView:           0, // enhancedViewScript
+			SecondView:            4, // enhancedViewOCR
 		},
 		script:      script,
 		executor:    executor,
@@ -189,8 +199,13 @@ func (d *Debugger) ShouldBreak(lineNumber int, line ParsedLine) bool {
 		return true
 	}
 
-	// Break in step mode
+	// Break in step mode (but skip empty lines and comments)
 	if d.state.StepMode {
+		// Skip empty lines and comments during stepping to avoid tedious debugging
+		if line.Type == EmptyLine || line.Type == CommentLine {
+			d.logger.Debug("Skipping line during step mode", "line", lineNumber, "type", line.Type.String())
+			return false
+		}
 		d.logger.Debug("Breaking due to step mode", "line", lineNumber, "step_mode", d.state.StepMode)
 		return true
 	}
@@ -363,17 +378,21 @@ func (d *Debugger) processDebugCommand(input string) (DebugAction, bool) {
 	switch command {
 	case "c", "continue":
 		d.state.StepMode = false
+		d.state.LastAction = DebugActionContinue
 		return DebugActionContinue, true
 
 	case "s", "step":
 		d.state.StepMode = true
+		d.state.LastAction = DebugActionStep
 		return DebugActionStep, true
 
 	case "n", "next", "stepover":
 		d.state.StepMode = true
+		d.state.LastAction = DebugActionStepOver
 		return DebugActionStepOver, true
 
 	case "q", "quit", "stop":
+		d.state.LastAction = DebugActionStop
 		return DebugActionStop, true
 
 	case "v", "vars", "variables":
@@ -660,4 +679,25 @@ func (d *Debugger) RefreshOCR() error {
 	d.UpdateOCRResult(result.Result, "", false)
 
 	return nil
+}
+
+// SaveTUIState saves the current TUI state to persist across debug sessions
+func (d *Debugger) SaveTUIState(dualPaneMode bool, currentView int, secondView int) {
+	if d.state == nil {
+		return
+	}
+
+	d.state.DualPaneMode = dualPaneMode
+	d.state.CurrentView = currentView
+	d.state.SecondView = secondView
+	d.logger.Debug("TUI state saved", "dual_pane", dualPaneMode, "current_view", currentView, "second_view", secondView)
+}
+
+// GetTUIState returns the persisted TUI state
+func (d *Debugger) GetTUIState() (bool, int, int) {
+	if d.state == nil {
+		return false, 0, 4 // Default: single pane, script view, OCR second view
+	}
+
+	return d.state.DualPaneMode, d.state.CurrentView, d.state.SecondView
 }

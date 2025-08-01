@@ -68,5 +68,5 @@
     "publish": "npm run compile \u0026\u0026 vsce publish",
     "watch": "tsc -watch -p ./"
   },
-  "version": "0.0.2-11-g93b387c-dev"
+  "version": "0.0.2-12-ga79789f-dev"
 }

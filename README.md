@@ -182,6 +182,29 @@ $3
 <watch "ready" 30s>
 ```
 
+### Enhanced TUI Debugging
+```bash
+# Interactive debugging with dual-pane view and syntax highlighting
+qmp script2 106 automation.sc2 --debug-tui
+
+# Console debugging (SSH/remote friendly)
+qmp script2 106 automation.sc2 --debug-console
+
+# Step-by-step debugging
+qmp script2 106 automation.sc2 --debug
+
+# Set breakpoints on specific lines
+qmp script2 106 automation.sc2 --debug-tui --breakpoint 10,25,50
+```
+
+**TUI Debugging Features:**
+- **Dual-Pane Mode**: Press `t` to toggle side-by-side views (Script + OCR/Variables/etc.)
+- **VSCode-Style Syntax Highlighting**: Rainbow colors matching the VSCode extension
+- **Smart Navigation**: Number keys (1-7) switch views, left/right arrows navigate panes
+- **State Persistence**: Dual-pane mode and view selections persist across debug sessions
+- **Live OCR Integration**: Real-time screen monitoring with search capabilities
+- **Multiple Views**: Script, Variables, Breakpoints, OCR Preview, Watch Progress, Performance, Help
+
 ## 🏗️ Architecture
 
 ### Core Packages

@@ -18,8 +18,7 @@ var (
 	dryRun              bool     // --dry-run
 	scriptTimeout       string   // --timeout 300s
 	debugMode           bool     // --debug (step mode)
-	debugInteractive    bool     // --debug-interactive (TUI mode)
-	debugEnhanced       bool     // --debug-enhanced (Enhanced TUI mode)
+	debugTUI            bool     // --debug-tui (TUI mode with enhanced OCR features)
 	debugConsole        bool     // --debug-console (force console mode)
 	debugBreakpoints    []int    // --breakpoint line1,line2,line3
 )
@@ -87,11 +86,8 @@ Examples:
   # Debug mode with detailed logging
   qmp script2 106 login.script --debug --log-level debug
 
-  # Interactive debugging with TUI
-  qmp script2 106 login.script --debug-interactive
-
-  # Enhanced debugging with OCR TUI
-  qmp script2 106 login.script --debug-enhanced
+  # TUI debugging with enhanced OCR features
+  qmp script2 106 login.script --debug-tui
 
   # Console debugging (SSH/remote friendly)
   qmp script2 106 login.script --debug-console
@@ -217,17 +213,15 @@ Examples:
 			executor.SetScript(script) // Set script for function access
 
 			// Enable debugging for dry-run if requested
-			if debugMode || debugInteractive || debugEnhanced || debugConsole || len(debugBreakpoints) > 0 {
+			if debugMode || debugTUI || debugConsole || len(debugBreakpoints) > 0 {
 				var debugModeType script2.DebugMode
 				if debugConsole {
 					debugModeType = script2.DebugModeBreakpoints
 					logging.UserInfo("🐛 Dry-run with console debugging - SSH/remote friendly")
-				} else if debugEnhanced {
+				} else if debugTUI {
 					debugModeType = script2.DebugModeInteractive
-					logging.UserInfo("🔍 Dry-run with enhanced debugging - Advanced OCR TUI with performance monitoring")
-				} else if debugInteractive {
-					debugModeType = script2.DebugModeInteractive
-					logging.UserInfo("🐛 Dry-run with interactive debugging - TUI will appear on breakpoints")
+					logging.UserInfo("🔍 Dry-run with TUI debugging - Enhanced interface with OCR features")
+					logging.UserInfo("   Features: O=full OCR, /=search, g=grid, d=diff, e=export, p=performance")
 				} else if debugMode {
 					debugModeType = script2.DebugModeStep
 					logging.UserInfo("🐛 Dry-run with step debugging enabled")
@@ -238,8 +232,8 @@ Examples:
 
 				debugger := executor.EnableDebugging(debugModeType)
 
-				// Enable enhanced TUI if requested
-				if debugEnhanced {
+				// Always enable enhanced TUI for --debug-tui
+				if debugTUI {
 					debugger.EnableEnhancedTUI()
 				}
 
@@ -315,21 +309,18 @@ Examples:
 		executor.SetScript(script) // Set script for function access
 
 		// Set up debugging if requested
-		if debugMode || debugInteractive || debugEnhanced || debugConsole || len(debugBreakpoints) > 0 {
+		if debugMode || debugTUI || debugConsole || len(debugBreakpoints) > 0 {
 			var debugModeType script2.DebugMode
 			if debugConsole {
 				debugModeType = script2.DebugModeBreakpoints // Force console mode
 				logging.UserInfo("🐛 Console debugging enabled - perfect for SSH/remote sessions")
 				logging.UserInfo("   Will break on line 1, <break> directives, and set breakpoints")
-			} else if debugEnhanced {
+			} else if debugTUI {
 				debugModeType = script2.DebugModeInteractive
-				logging.UserInfo("🔍 Enhanced debugging enabled - Advanced OCR TUI with real-time monitoring")
+				logging.UserInfo("🔍 TUI debugging enabled - Enhanced interface with OCR features")
 				logging.UserInfo("   Enhanced features: O=full OCR, /=search, g=grid, d=diff, e=export, p=performance")
 				logging.UserInfo("   Navigation: ↑↓←→/hjkl=navigate grid, r=refresh, a=auto-refresh")
-			} else if debugInteractive {
-				debugModeType = script2.DebugModeInteractive
-				logging.UserInfo("🐛 Interactive debugging enabled - TUI will appear on line 1 and breakpoints")
-				logging.UserInfo("   Use keys: c=continue, s=step, o=OCR view, w=watch progress, q=quit")
+				logging.UserInfo("   Controls: c=continue, s=step, o=OCR view, w=watch progress, q=quit")
 
 				// Check environment for SSH/remote usage
 				if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" {
@@ -346,8 +337,8 @@ Examples:
 
 			debugger := executor.EnableDebugging(debugModeType)
 
-			// Enable enhanced TUI if requested
-			if debugEnhanced {
+			// Always enable enhanced TUI for --debug-tui
+			if debugTUI {
 				debugger.EnableEnhancedTUI()
 			}
 
@@ -694,8 +685,61 @@ echo "To exit with code 1: \\<exit 1>"`
 	},
 }
 
+// scriptCmd represents the legacy script command - now uses script2 functionality
+var scriptCmd = &cobra.Command{
+	Use:   "script [vmid] [script-file] [training-data-file]",
+	Short: "Execute scripts with advanced features (same as script2)",
+	Long: `Execute scripts with enhanced Script2 functionality including variables, functions, and control flow.
+
+⚠️  NOTICE: The 'script' command now provides the same advanced functionality as 'script2'.
+    All Script2 features are available: variables, functions, conditionals, loops, and debugging.
+    Consider using 'script2' directly for new scripts.
+
+The VM ID can be provided as an argument or set via the QMP_VM_ID environment variable.
+The training data file can be provided as an argument or set via the QMP_TRAINING_DATA environment variable.
+
+Enhanced Script2 Features:
+  Variables:     USER=admin, USER=${USER:-default}, $USER
+  Functions:     <function name>, <call name args>, <end-function>
+  Conditionals:  <if-found "text" 5s>, <else>, <end-if>
+  Loops:         <while-found "text" 30s poll 1s>, <retry 3>, <repeat 5>
+  Control Flow:  <break>, <return>, <exit 1>
+  Composition:   <include "script.txt">
+  Debugging:     <break> directive, --debug flags
+
+Comments use configurable character (default: #):
+  # This is a comment
+  \# This types a literal # character
+
+Environment Variables:
+  Load from file: --env-file production.env
+  Override vars:  --var USER=admin --var PASSWORD=secret
+  Use in script:  $USER, ${PASSWORD:-default}
+
+Debugging Options:
+  --debug                Step-by-step debugging
+  --debug-tui            TUI debugging with enhanced OCR features
+  --debug-console        Console debugging (SSH friendly)
+  --breakpoint 10,25     Set breakpoints on specific lines`,
+	Args: cobra.RangeArgs(1, 3),
+	Run: script2Cmd.Run, // Use the exact same run function as script2
+	Example: `  # Basic script execution (works with legacy scripts)
+  qmp script 106 legacy-script.txt
+
+  # Enhanced script execution with Script2 features
+  qmp script 106 enhanced-login.script training.json
+
+  # TUI debugging with enhanced OCR features
+  qmp script 106 login.script training.json --debug-tui
+
+  # Variable override (Script2 functionality)
+  qmp script 106 deploy.script --var USER=admin --var ENV=production`,
+}
+
 func init() {
+	// Register both script and script2 commands
 	rootCmd.AddCommand(script2Cmd)
+	rootCmd.AddCommand(scriptCmd)
 	script2Cmd.AddCommand(script2SampleCmd)
 
 	// Variable override flags
@@ -717,11 +761,8 @@ func init() {
 	script2Cmd.Flags().BoolVar(&debugMode, "debug", false,
 		"Enable step-by-step debugging mode")
 
-	script2Cmd.Flags().BoolVar(&debugInteractive, "debug-interactive", false,
-		"Enable interactive TUI debugging mode")
-
-	script2Cmd.Flags().BoolVar(&debugEnhanced, "debug-enhanced", false,
-		"Enable enhanced TUI debugging with advanced OCR features")
+	script2Cmd.Flags().BoolVar(&debugTUI, "debug-tui", false,
+		"Enable TUI debugging with enhanced OCR features and performance monitoring")
 
 	script2Cmd.Flags().BoolVar(&debugConsole, "debug-console", false,
 		"Enable console debugging mode (SSH/remote friendly)")
@@ -736,8 +777,8 @@ func init() {
   # Script with WATCH commands (requires training data)
   qmp script2 106 login.script training.json
 
-  # Enhanced debugging with advanced OCR TUI
-  qmp script2 106 login.script training.json --debug-enhanced
+  # TUI debugging with enhanced OCR features
+  qmp script2 106 login.script training.json --debug-tui
 
   # Override specific variables
   qmp script2 106 login.script training.json --var USER=admin --var RETRY_COUNT=5
@@ -747,4 +788,29 @@ func init() {
 
   # Test script parsing without execution
   qmp script2 106 complex.script --dry-run --log-level debug`
+
+	// Add same flags to legacy script command for compatibility
+	scriptCmd.Flags().StringArrayVar(&scriptVars, "var", []string{},
+		"Set script variables (format: key=value)")
+
+	scriptCmd.Flags().StringVar(&envFile, "env-file", "",
+		"Load environment variables from file")
+
+	scriptCmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"Parse and validate script without executing VM commands")
+
+	scriptCmd.Flags().StringVar(&scriptTimeout, "timeout", "300s",
+		"Overall script execution timeout")
+
+	scriptCmd.Flags().BoolVar(&debugMode, "debug", false,
+		"Enable step-by-step debugging mode")
+
+	scriptCmd.Flags().BoolVar(&debugTUI, "debug-tui", false,
+		"Enable TUI debugging with enhanced OCR features and performance monitoring")
+
+	scriptCmd.Flags().BoolVar(&debugConsole, "debug-console", false,
+		"Enable console debugging mode (SSH/remote friendly)")
+
+	scriptCmd.Flags().IntSliceVar(&debugBreakpoints, "breakpoint", []int{},
+		"Set breakpoints on specific line numbers (comma-separated)")
 }

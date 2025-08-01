@@ -59,6 +59,8 @@ type enhancedDebugTUIModel struct {
 	lastAction     DebugAction
 	inputMode      bool
 	currentView    enhancedDebugView
+	secondView     enhancedDebugView
+	dualPaneMode   bool
 	width          int
 	height         int
 	helpVisible    bool
@@ -132,6 +134,9 @@ type enhancedDebugKeyMap struct {
 	PerfView       key.Binding     // Performance view
 	PerfClear      key.Binding     // Clear performance log
 
+	// Layout controls
+	DualPaneToggle key.Binding     // Toggle dual pane mode
+
 	// Help
 	Help           key.Binding     // Show help view
 }
@@ -159,6 +164,9 @@ func EnhancedDebugKeyMap() enhancedDebugKeyMap {
 		PerfView:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "performance")),
 		PerfClear:      key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "clear perf")),
 
+		// Layout controls
+		DualPaneToggle: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "toggle dual pane")),
+
 		// Help
 		Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show help")),
 	}
@@ -171,13 +179,18 @@ func (t *EnhancedDebugTUI) InitialModel() tea.Model {
 	searchInput.Placeholder = "Search OCR text..."
 	searchInput.CharLimit = 100
 
+	// Restore TUI state from debugger
+	dualPaneMode, currentView, secondView := t.debugger.GetTUIState()
+
 	return &enhancedDebugTUIModel{
 		debugger:    t.debugger,
 		viewport:    viewport.New(80, 24),
 		textInput:   textinput.New(),
 		searchInput: searchInput,
 		keys:        EnhancedDebugKeyMap(),
-		currentView: enhancedViewScript,
+		currentView:  enhancedDebugView(currentView),
+		secondView:   enhancedDebugView(secondView),
+		dualPaneMode: dualPaneMode,
 		ocrState: EnhancedOCRState{
 			RefreshRate:     2 * time.Second,
 			AutoRefresh:     false, // Start with manual refresh in debug mode
@@ -268,32 +281,40 @@ func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Mo
 	case key.Matches(msg, m.keys.Continue):
 		m.lastAction = DebugActionContinue
 		m.debugger.GetState().StepMode = false  // Continue without stepping
-		return m, tea.Quit  // Execute next statement and quit to continue execution
+		return m.saveTUIStateAndQuit()  // Execute next statement and quit to continue execution
 	case key.Matches(msg, m.keys.Step):
 		m.lastAction = DebugActionStep
 		m.debugger.GetState().StepMode = true   // Enable step mode
-		return m, tea.Quit  // Execute next statement and quit to continue execution
+		return m.saveTUIStateAndQuit()  // Execute next statement and quit to continue execution
 	case key.Matches(msg, m.keys.StepOver):
 		m.lastAction = DebugActionStepOver
 		m.debugger.GetState().StepMode = true   // Enable step mode
-		return m, tea.Quit  // Execute next statement (step over) and quit to continue execution
+		return m.saveTUIStateAndQuit()  // Execute next statement (step over) and quit to continue execution
 	case key.Matches(msg, m.keys.Stop):
 		m.lastAction = DebugActionStop
-		return m, tea.Quit
+		return m.saveTUIStateAndQuit()
 	case key.Matches(msg, m.keys.Quit):
 		m.lastAction = DebugActionStop
-		return m, tea.Quit
+		return m.saveTUIStateAndQuit()
 
 	// Help view
 	case key.Matches(msg, m.keys.Help):
-		m.currentView = enhancedViewHelp
+		m.switchToView(enhancedViewHelp)
+		return m, nil
+
+	// Layout controls
+	case key.Matches(msg, m.keys.DualPaneToggle):
+		m.dualPaneMode = !m.dualPaneMode
+		// Enable dual pane automatically when screen is wide enough
+		if m.dualPaneMode && m.width < 120 {
+			m.dualPaneMode = false // Auto-disable if too narrow
+		}
 		m.updateViewportContent()
 		return m, nil
 
 	// Enhanced OCR controls
 	case key.Matches(msg, m.keys.OCRFullView):
-		m.currentView = enhancedViewOCRFull
-		m.updateViewportContent()
+		m.switchToView(enhancedViewOCRFull)
 		return m, m.refreshOCR()
 
 	case key.Matches(msg, m.keys.OCRSearch):
@@ -321,8 +342,7 @@ func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Mo
 		return m, m.exportOCR()
 
 	case key.Matches(msg, m.keys.PerfView):
-		m.currentView = enhancedViewPerformance
-		m.updateViewportContent()
+		m.switchToView(enhancedViewPerformance)
 
 	case key.Matches(msg, m.keys.PerfClear):
 		m.ocrState.PerformanceLog = m.ocrState.PerformanceLog[:0]
@@ -349,6 +369,9 @@ func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Mo
 				m.ocrState.HighlightCol--
 			}
 			m.updateViewportContent()
+		} else if m.dualPaneMode && m.width >= 120 {
+			// In dual pane mode, left arrow switches focus to left pane (current view)
+			// No action needed as currentView is already the "left" pane
 		}
 	case key.Matches(msg, m.keys.NavRight):
 		if m.currentView == enhancedViewOCRFull && m.ocrState.CurrentOCR != nil {
@@ -362,46 +385,40 @@ func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Mo
 				m.ocrState.HighlightCol++
 			}
 			m.updateViewportContent()
+		} else if m.dualPaneMode && m.width >= 120 {
+			// In dual pane mode, right arrow swaps current and second views (focus right pane)
+			m.currentView, m.secondView = m.secondView, m.currentView
+			m.updateViewportContent()
 		}
 
 	// View switching
 	case key.Matches(msg, m.keys.Variables):
-		m.currentView = enhancedViewVariables
-		m.updateViewportContent()
+		m.switchToView(enhancedViewVariables)
 	case key.Matches(msg, m.keys.Breakpoints):
-		m.currentView = enhancedViewBreakpoints
-		m.updateViewportContent()
+		m.switchToView(enhancedViewBreakpoints)
 	case key.Matches(msg, m.keys.OCRView):
-		m.currentView = enhancedViewOCR
-		m.updateViewportContent()
+		m.switchToView(enhancedViewOCR)
 
 	// Refresh
 	case key.Matches(msg, m.keys.Refresh):
 		return m, m.refreshOCR()
 
-	// Number key shortcuts
+	// Number key shortcuts - support dual pane mode
 	case msg.String() == "1":
-		m.currentView = enhancedViewScript
-		m.updateViewportContent()
+		m.switchToView(enhancedViewScript)
 	case msg.String() == "2":
-		m.currentView = enhancedViewVariables
-		m.updateViewportContent()
+		m.switchToView(enhancedViewVariables)
 	case msg.String() == "3":
-		m.currentView = enhancedViewBreakpoints
-		m.updateViewportContent()
+		m.switchToView(enhancedViewBreakpoints)
 	case msg.String() == "4":
-		m.currentView = enhancedViewOCR
-		m.updateViewportContent()
+		m.switchToView(enhancedViewOCR)
 	case msg.String() == "5":
-		m.currentView = enhancedViewWatchProgress
-		m.updateViewportContent()
+		m.switchToView(enhancedViewWatchProgress)
 	case msg.String() == "6":
-		m.currentView = enhancedViewOCRFull
-		m.updateViewportContent()
+		m.switchToView(enhancedViewOCRFull)
 		return m, m.refreshOCR()
 	case msg.String() == "7":
-		m.currentView = enhancedViewPerformance
-		m.updateViewportContent()
+		m.switchToView(enhancedViewPerformance)
 
 	case msg.String() == ":":
 		m.inputMode = true
@@ -412,7 +429,7 @@ func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Mo
 	case msg.Type == tea.KeyEnter:
 		m.lastAction = DebugActionContinue
 		m.debugger.GetState().StepMode = false  // Continue without stepping
-		return m, tea.Quit
+		return m.saveTUIStateAndQuit()
 	}
 
 	return m, nil
@@ -566,7 +583,31 @@ func (m *enhancedDebugTUIModel) renderEnhancedScriptView() string {
 		"step_mode", state.StepMode,
 		"script_lines", len(script.Lines))
 
-	content.WriteString(headerStyle.Render("📜 ENHANCED SCRIPT VIEW") + "\n\n")
+	// Build location string with file and line info
+	var locationInfo string
+	if script != nil && script.Metadata.Filename != "" {
+		// Extract just the filename from the full path
+		filename := script.Metadata.Filename
+		if lastSlash := strings.LastIndex(filename, "/"); lastSlash != -1 {
+			filename = filename[lastSlash+1:]
+		}
+
+		// Show current context
+		if len(state.CallStack) > 0 {
+			// Inside a function
+			currentFunction := state.CallStack[len(state.CallStack)-1]
+			locationInfo = fmt.Sprintf("📍 %s:%d (in function %s)",
+				filename, state.CurrentLine, currentFunction)
+		} else {
+			// Main script
+			locationInfo = fmt.Sprintf("📍 %s:%d", filename, state.CurrentLine)
+		}
+	} else {
+		locationInfo = fmt.Sprintf("📍 Line %d", state.CurrentLine)
+	}
+
+	content.WriteString(headerStyle.Render("📜 ENHANCED SCRIPT VIEW") + "\n")
+	content.WriteString(mutedStyle.Render(locationInfo) + "\n\n")
 
 	// Check if script is loaded
 	if script == nil {
@@ -674,12 +715,74 @@ func (m *enhancedDebugTUIModel) renderEnhancedScriptView() string {
 			marker = " "
 		}
 
-		// Format the line with enhanced information
-		formattedLine := fmt.Sprintf("%s %s │ %s", marker, prefix, line.Content)
+		// Format the line with syntax highlighting
+		highlightedContent := m.applySyntaxHighlighting(line.Content, line.Type)
+		formattedLine := fmt.Sprintf("%s %s │ %s", marker, prefix, highlightedContent)
 		content.WriteString(lineStyle.Render(formattedLine) + "\n")
 	}
 
 	return content.String()
+}
+
+// applySyntaxHighlighting applies VSCode-like syntax highlighting to script2 content
+func (m *enhancedDebugTUIModel) applySyntaxHighlighting(content string, lineType LineType) string {
+	// Define colors matching the VSCode extension theme (only the ones we use)
+	var (
+		// Comments
+		commentColor = lipgloss.Color("#888888")
+
+		// Keywords and directives (used colors only)
+		functionKeywordColor = lipgloss.Color("#ff3366")   // <function>, <end-function>
+		switchKeywordColor  = lipgloss.Color("#ff9933")    // <switch>, <end-switch>
+		watchColor         = lipgloss.Color("#ccff99")     // <watch>
+		setColor           = lipgloss.Color("#ffccff")     // <set>
+		callColor          = lipgloss.Color("#ccccff")     // <call>
+
+		// Keys and input
+		navigationKeyColor = lipgloss.Color("#99ff66")     // <enter>, <tab>
+
+		// Variables
+		variableNameColor   = lipgloss.Color("#66ffaa")    // variable names
+
+		// Default text
+		defaultColor       = lipgloss.Color("#e0e0ff")
+	)
+
+	// Handle different line types
+	switch lineType {
+	case CommentLine:
+		return lipgloss.NewStyle().Foreground(commentColor).Italic(true).Render(content)
+	case EmptyLine:
+		return content
+	}
+
+	// Apply basic highlighting for common patterns
+	result := content
+
+	if strings.Contains(result, "<function") || strings.Contains(result, "<end-function>") {
+		return lipgloss.NewStyle().Foreground(functionKeywordColor).Bold(true).Render(result)
+	}
+	if strings.Contains(result, "<call") {
+		return lipgloss.NewStyle().Foreground(callColor).Bold(true).Render(result)
+	}
+	if strings.Contains(result, "<watch") {
+		return lipgloss.NewStyle().Foreground(watchColor).Bold(true).Render(result)
+	}
+	if strings.Contains(result, "<set") {
+		return lipgloss.NewStyle().Foreground(setColor).Bold(true).Render(result)
+	}
+	if strings.Contains(result, "<switch") || strings.Contains(result, "<case") {
+		return lipgloss.NewStyle().Foreground(switchKeywordColor).Bold(true).Render(result)
+	}
+	if strings.Contains(result, "<enter>") || strings.Contains(result, "<tab>") {
+		return lipgloss.NewStyle().Foreground(navigationKeyColor).Render(result)
+	}
+	if strings.HasPrefix(strings.TrimSpace(result), "$") {
+		return lipgloss.NewStyle().Foreground(variableNameColor).Render(result)
+	}
+
+	// Default styling
+	return lipgloss.NewStyle().Foreground(defaultColor).Render(result)
 }
 
 func (m *enhancedDebugTUIModel) renderFullScreenOCRView() string {
@@ -1083,20 +1186,54 @@ func (m *enhancedDebugTUIModel) renderEnhancedHelpView() string {
 func (m *enhancedDebugTUIModel) View() string {
 	var content strings.Builder
 
-	// Header
-	title := fmt.Sprintf("🐛 Enhanced Script2 Debugger - %s", m.currentViewString())
+	// Header with location information
+	state := m.debugger.GetState()
+	script := m.debugger.GetScript()
+
+	// Build location info for header
+	var locationInfo string
+	if script != nil && script.Metadata.Filename != "" {
+		filename := script.Metadata.Filename
+		if lastSlash := strings.LastIndex(filename, "/"); lastSlash != -1 {
+			filename = filename[lastSlash+1:]
+		}
+
+		if len(state.CallStack) > 0 {
+			currentFunction := state.CallStack[len(state.CallStack)-1]
+			locationInfo = fmt.Sprintf("%s:%d (in %s)", filename, state.CurrentLine, currentFunction)
+		} else {
+			locationInfo = fmt.Sprintf("%s:%d", filename, state.CurrentLine)
+		}
+	} else {
+		locationInfo = fmt.Sprintf("Line %d", state.CurrentLine)
+	}
+
+	var title string
+	if m.dualPaneMode && m.width >= 120 {
+		title = fmt.Sprintf("🐛 Enhanced Script2 Debugger - %s | %s", m.viewString(m.currentView), m.viewString(m.secondView))
+	} else {
+		title = fmt.Sprintf("🐛 Enhanced Script2 Debugger - %s", m.currentViewString())
+	}
 	content.WriteString(headerStyle.Render(title) + "\n")
+	content.WriteString(mutedStyle.Render("📍 " + locationInfo) + "\n")
 
 	// Search bar (if in search mode)
 	if m.searchMode {
 		content.WriteString("Search: " + m.searchInput.View() + "\n")
 	}
 
-	// Main content
-	content.WriteString(m.viewport.View())
+	// Main content - support dual pane mode
+	if m.dualPaneMode && m.width >= 120 {
+		content.WriteString(m.renderDualPane())
+	} else {
+		content.WriteString(m.viewport.View())
+	}
 
 	// Footer with status and help
 	footer := ""
+	if m.dualPaneMode && m.width >= 120 {
+		footer += "📊 Dual-pane ON • "
+	}
 	if m.ocrState.AutoRefresh {
 		footer += "🔄 Auto-refresh ON • "
 	}
@@ -1110,11 +1247,21 @@ func (m *enhancedDebugTUIModel) View() string {
 
 	content.WriteString("\n" + footerStyle.Render(footer))
 
+	// Bottom view menu (when in dual pane mode and space allows)
+	if m.dualPaneMode && m.width >= 120 && m.height >= 15 {
+		viewMenu := m.renderViewMenu()
+		content.WriteString("\n" + viewMenu)
+	}
+
 	return content.String()
 }
 
 func (m *enhancedDebugTUIModel) currentViewString() string {
-	switch m.currentView {
+	return m.viewString(m.currentView)
+}
+
+func (m *enhancedDebugTUIModel) viewString(view enhancedDebugView) string {
+	switch view {
 	case enhancedViewScript:
 		return "Script"
 	case enhancedViewVariables:
@@ -1151,6 +1298,140 @@ func (m *enhancedDebugTUIModel) renderProgressBar(progress float64, width int) s
 	return fmt.Sprintf("[%s] %s",
 		successStyle.Render(bar),
 		mutedStyle.Render(percentage))
+}
+
+// renderDualPane renders two views side-by-side when screen space allows
+func (m *enhancedDebugTUIModel) renderDualPane() string {
+	// Calculate pane widths more conservatively
+	availableWidth := m.width - 6 // Account for divider and margins
+	leftWidth := availableWidth / 2
+	rightWidth := availableWidth - leftWidth
+
+	// Ensure minimum widths
+	if leftWidth < 40 {
+		leftWidth = 40
+	}
+	if rightWidth < 40 {
+		rightWidth = 40
+	}
+
+	// Create styles for consistent width handling
+	leftStyle := lipgloss.NewStyle().Width(leftWidth).Align(lipgloss.Left)
+	rightStyle := lipgloss.NewStyle().Width(rightWidth).Align(lipgloss.Left)
+
+	// Render left pane content (current view)
+	leftContent := m.renderViewContent(m.currentView, leftWidth, m.height-8)
+
+	// Render right pane content (second view)
+	rightContent := m.renderViewContent(m.secondView, rightWidth, m.height-8)
+
+	// Use lipgloss JoinHorizontal for proper alignment
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftStyle.Render(leftContent),
+		" │ ",
+		rightStyle.Render(rightContent),
+	)
+}
+
+// renderViewContent renders content for a specific view with given dimensions
+func (m *enhancedDebugTUIModel) renderViewContent(view enhancedDebugView, width, height int) string {
+	// Temporarily switch to the requested view and render content
+	originalView := m.currentView
+	originalViewport := m.viewport
+
+	// Create temporary viewport for this view with proper sizing
+	tempViewport := viewport.New(width-2, height) // Account for padding
+	tempViewport.Width = width - 2
+	tempViewport.Height = height
+
+	m.currentView = view
+	m.viewport = tempViewport
+
+	// Update content for this view
+	m.updateViewportContent()
+	content := m.viewport.View()
+
+	// Restore original state
+	m.currentView = originalView
+	m.viewport = originalViewport
+
+	return content
+}
+
+// renderViewMenu renders a compact view selection menu at the bottom
+func (m *enhancedDebugTUIModel) renderViewMenu() string {
+	var menu strings.Builder
+
+	// Menu title
+	menu.WriteString(mutedStyle.Render("View Menu: "))
+
+	// View options with shortcuts
+	views := []struct {
+		key  string
+		view enhancedDebugView
+		name string
+	}{
+		{"1", enhancedViewScript, "Script"},
+		{"2", enhancedViewVariables, "Variables"},
+		{"3", enhancedViewBreakpoints, "Breakpoints"},
+		{"o", enhancedViewOCR, "OCR"},
+		{"O", enhancedViewOCRFull, "Full OCR"},
+		{"/", enhancedViewOCRSearch, "Search"},
+		{"w", enhancedViewWatchProgress, "Watch"},
+		{"p", enhancedViewPerformance, "Performance"},
+		{"?", enhancedViewHelp, "Help"},
+	}
+
+	for i, item := range views {
+		if i > 0 {
+			menu.WriteString(" • ")
+		}
+
+		// Highlight current views
+		style := mutedStyle
+		if item.view == m.currentView || item.view == m.secondView {
+			style = successStyle
+		}
+
+		menu.WriteString(fmt.Sprintf("%s=%s",
+			style.Render(item.key),
+			style.Render(item.name)))
+	}
+
+	// Add dual pane toggle hint
+	menu.WriteString(" • " + mutedStyle.Render("t=toggle dual"))
+
+	return menu.String()
+}
+
+// saveTUIStateAndQuit saves the current TUI state to the debugger and quits
+func (m *enhancedDebugTUIModel) saveTUIStateAndQuit() (tea.Model, tea.Cmd) {
+	// Save TUI state to persist across debug sessions
+	m.debugger.SaveTUIState(m.dualPaneMode, int(m.currentView), int(m.secondView))
+	return m, tea.Quit
+}
+
+// switchToView handles view switching in both single and dual pane modes
+func (m *enhancedDebugTUIModel) switchToView(view enhancedDebugView) {
+	if m.dualPaneMode && m.width >= 120 {
+		// In dual pane mode, if the view is already showing, switch it to the other pane
+		// Otherwise, replace the current view
+		if view == m.currentView {
+			// Switch the view to the second pane
+			m.secondView = view
+		} else if view == m.secondView {
+			// Switch the view to the current pane
+			m.currentView = view
+		} else {
+			// Replace current view with new view
+			m.currentView = view
+		}
+	} else {
+		// Single pane mode - just switch the current view
+		m.currentView = view
+	}
+	m.updateViewportContent()
 }
 
 // handleInputMode handles command input (enhanced version)
