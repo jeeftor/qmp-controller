@@ -20,7 +20,7 @@ var (
 	assignPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):=([^}]*)\}`)
 
 	// ${VAR:+value} - use value if VAR is set and non-empty
-	conditionalPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):+([^}]*)\}`)
+	conditionalPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_][A-Za-z0-9_]*):\+([^}]*)\}`)
 
 	// {VAR} - simple brace expansion (script2 style)
 	braceVarPattern = regexp.MustCompile(`\{([A-Za-z0-9_][A-Za-z0-9_]*)\}`)
@@ -300,23 +300,41 @@ func GetUsedVariables(text string) []string {
 	var variables []string
 	seen := make(map[string]bool)
 
-	// Find all variable patterns
-	patterns := []*regexp.Regexp{
-		simpleVarPattern,
-		defaultPattern,
-		assignPattern,
-		conditionalPattern,
+	// Process simple variables: $VAR and ${VAR}
+	matches := simpleVarPattern.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		for i := 1; i < len(match); i++ {
+			if match[i] != "" && !seen[match[i]] {
+				variables = append(variables, match[i])
+				seen[match[i]] = true
+			}
+		}
 	}
 
-	for _, pattern := range patterns {
-		matches := pattern.FindAllStringSubmatch(text, -1)
-		for _, match := range matches {
-			for i := 1; i < len(match); i++ {
-				if match[i] != "" && !seen[match[i]] {
-					variables = append(variables, match[i])
-					seen[match[i]] = true
-				}
-			}
+	// Process default patterns: ${VAR:-default} - only extract the variable name, not the default
+	matches = defaultPattern.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		if len(match) > 1 && match[1] != "" && !seen[match[1]] {
+			variables = append(variables, match[1])
+			seen[match[1]] = true
+		}
+	}
+
+	// Process assign patterns: ${VAR:=default} - only extract the variable name, not the default
+	matches = assignPattern.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		if len(match) > 1 && match[1] != "" && !seen[match[1]] {
+			variables = append(variables, match[1])
+			seen[match[1]] = true
+		}
+	}
+
+	// Process conditional patterns: ${VAR:+value} - only extract the variable name, not the value
+	matches = conditionalPattern.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		if len(match) > 1 && match[1] != "" && !seen[match[1]] {
+			variables = append(variables, match[1])
+			seen[match[1]] = true
 		}
 	}
 

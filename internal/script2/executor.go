@@ -30,8 +30,33 @@ func (e *Executor) Execute(script *Script) (*ExecutionResult, error) {
 		"dry_run", e.context.DryRun,
 		"timeout", e.context.Timeout)
 
+	// Note: We no longer need separate dry-run execution path
+	// The ExecutionMode system handles real vs dry-run automatically
+
+	// Perform validation (especially important for dry-run mode)
 	if e.context.DryRun {
-		return e.executeDryRun(script, result, startTime)
+		logger.Info("🔍 Dry run execution - validating script structure")
+		validationResult := e.parser.ValidateScript(script)
+
+		// Log validation results
+		if len(validationResult.Errors) > 0 {
+			result.Success = false
+			result.Error = fmt.Sprintf("Script validation failed with %d errors", len(validationResult.Errors))
+
+			for _, err := range validationResult.Errors {
+				logger.Error("Validation error",
+					"line_number", err.LineNumber,
+					"message", err.Message,
+					"suggestion", err.Suggestion)
+			}
+		}
+
+		for _, warning := range validationResult.Warnings {
+			logger.Warn("Validation warning",
+				"line_number", warning.LineNumber,
+				"message", warning.Message,
+				"suggestion", warning.Suggestion)
+		}
 	}
 
 	// Initialize debugger if needed
@@ -50,12 +75,49 @@ func (e *Executor) Execute(script *Script) (*ExecutionResult, error) {
 			break
 		}
 
-		// Skip empty lines and comments
+		// Update debugger current line even for skipped lines (for accurate TUI display)
+		if e.debugger != nil && e.debugger.IsEnabled() {
+			e.debugger.GetState().CurrentLine = line.LineNumber
+		}
+
+		// In step mode, break on ALL lines (including comments/empty) for better user experience
+		if e.debugger != nil && e.debugger.IsEnabled() && e.debugger.GetState().StepMode {
+			if e.debugger.ShouldBreak(line.LineNumber, line) {
+				action, err := e.debugger.HandleBreak(line.LineNumber, line)
+				if err != nil {
+					result.Success = false
+					result.Error = fmt.Sprintf("debugger error at line %d: %s", line.LineNumber, err.Error())
+					break
+				}
+
+				switch action {
+				case DebugActionStop:
+					result.Success = false
+					result.Error = "Script execution stopped by debugger"
+					result.ExitCode = 130 // Interrupted
+					logger.Info("Script execution stopped by user")
+					return result, nil
+				case DebugActionScreenshot:
+					// Handle screenshot action
+					logging.UserInfof("📸 Taking debug screenshot...")
+					tempFile, err := TakeTemporaryScreenshot(e.context.Client, "debug-screenshot")
+					if err != nil {
+						logging.UserErrorf("❌ Screenshot failed: %v", err)
+					} else {
+						logging.UserInfof("✅ Screenshot saved: %s", tempFile.Name())
+						tempFile.Close()
+					}
+					continue // Continue execution after screenshot
+				}
+			}
+		}
+
+		// Skip empty lines and comments for actual execution (but not in step mode debugging)
 		if line.Type == EmptyLine || line.Type == CommentLine {
 			continue
 		}
 
-		// Check for debugging breakpoint
+		// Check for debugging breakpoint (for non-step mode)
 		if e.debugger != nil && e.debugger.ShouldBreak(line.LineNumber, line) {
 			action, err := e.debugger.HandleBreak(line.LineNumber, line)
 			if err != nil {
@@ -238,17 +300,7 @@ func (e *Executor) executeTextLine(line ParsedLine, logger *logging.ContextualLo
 		return nil // Empty text, nothing to send
 	}
 
-	logger.Debug("Sending text to VM", "text", expandedText, "original", text, "length", len(expandedText))
-
-	// Use the existing QMP client method for sending strings
-	if err := e.context.Client.SendString(expandedText, getKeyDelay()); err != nil {
-		return fmt.Errorf("failed to send text to VM: %w", err)
-	}
-
-	// Log the keyboard input for debugging
-	logging.LogKeyboard(e.context.VMID, expandedText, "text", getKeyDelay())
-
-	return nil
+	return e.executionMode.SendText(expandedText, logger)
 }
 
 // executeVariableLine processes variable assignments
@@ -366,85 +418,22 @@ func (e *Executor) executeReturn(directive *Directive, logger *logging.Contextua
 // executeKeySequence sends special key sequences
 func (e *Executor) executeKeySequence(directive *Directive, logger *logging.ContextualLogger) error {
 	keyName := directive.KeyName
-	logger.Info("Sending key sequence",
-		"directive", "key",
-		"key", keyName)
-
-	// Map script2 key names to QMP key names
-	qmpKey := mapKeyName(keyName)
-	if qmpKey == "" {
-		return fmt.Errorf("unsupported key sequence: %s", keyName)
-	}
-
-	// Send the key using QMP client
-	if err := e.context.Client.SendKey(qmpKey); err != nil {
-		return fmt.Errorf("failed to send key '%s': %w", keyName, err)
-	}
-
-	// Log the keyboard input
-	logging.LogKeyboard(e.context.VMID, keyName, "key_sequence", getKeyDelay())
-
-	return nil
+	return e.executionMode.SendKeySequence(keyName, logger)
 }
 
 // executeWatch waits for text to appear on screen using OCR with incremental processing
 func (e *Executor) executeWatch(directive *Directive, logger *logging.ContextualLogger) error {
 	searchText := directive.SearchText
 	timeout := directive.Timeout
-	pollInterval := 500 * time.Millisecond
 
-	logger.Info("Watching for text",
-		"directive", "watch",
-		"text", searchText,
-		"timeout", timeout)
-
-	// Start tracking watch operation in debugger if enabled
-	if e.debugger != nil && e.debugger.IsEnabled() {
-		e.debugger.StartWatchOperation(searchText, timeout, pollInterval)
+	// Expand variables in the search text
+	expandedSearchText, err := e.context.Variables.Expand(searchText)
+	if err != nil {
+		logger.Warn("Variable expansion failed in watch directive", "error", err, "text", searchText)
+		expandedSearchText = searchText
 	}
 
-	// Use shared incremental OCR search function
-	startTime := time.Now()
-	found := false
-
-	for time.Since(startTime) < timeout && !found {
-		// Use the shared incremental OCR search function (DRY principle)
-		searchFound, err := e.performIncrementalOCRSearch(searchText, "watch", logger)
-		if err != nil {
-			logger.Warn("Incremental OCR search failed in watch", "error", err)
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		found = searchFound
-
-		if found {
-			logger.Info("Watch condition satisfied",
-				"directive", "watch",
-				"text", searchText,
-				"elapsed", time.Since(startTime))
-
-			// Complete watch operation in debugger
-			if e.debugger != nil && e.debugger.IsEnabled() {
-				e.debugger.CompleteWatchOperation(true)
-			}
-			break
-		}
-
-		// Brief pause before next attempt
-		time.Sleep(pollInterval)
-	}
-
-	if !found {
-		// Complete watch operation in debugger with failure
-		if e.debugger != nil && e.debugger.IsEnabled() {
-			e.debugger.CompleteWatchOperation(false)
-		}
-
-		return fmt.Errorf("watch timeout: text '%s' not found within %v", searchText, timeout)
-	}
-
-	return nil
+	return e.executionMode.WatchForText(expandedSearchText, timeout, logger)
 }
 
 // executeConsole switches console
@@ -484,19 +473,13 @@ func (e *Executor) executeConsole(directive *Directive, logger *logging.Contextu
 // executeWait pauses execution
 func (e *Executor) executeWait(directive *Directive, logger *logging.ContextualLogger) error {
 	duration := directive.Timeout
-	logger.Debug("Waiting", "duration", duration)
-
-	time.Sleep(duration)
-	return nil
+	return e.executionMode.Wait(duration, logger)
 }
 
 // executeExit terminates script execution
 func (e *Executor) executeExit(directive *Directive, logger *logging.ContextualLogger) error {
 	exitCode := directive.ExitCode
-	logger.Info("Script exit requested", "exit_code", exitCode)
-
-	// Set exit code in context (this will be handled by the caller)
-	return fmt.Errorf("script exit: code %d", exitCode)
+	return e.executionMode.Exit(exitCode, logger)
 }
 
 // executeConditionalIfFound executes if-found conditional logic
@@ -673,31 +656,31 @@ func (e *Executor) executeConditionalBlock(block []ParsedLine, logger *logging.C
 // performIncrementalOCRSearch performs OCR with incremental processing for optimal performance
 // This is the shared function that implements DRY principles for OCR search across all commands
 func (e *Executor) performIncrementalOCRSearch(searchText string, operationType string, logger *logging.ContextualLogger) (bool, error) {
-	// Take temporary screenshot
-	tempFile, err := TakeTemporaryScreenshot(e.context.Client, fmt.Sprintf("script2-%s", operationType))
-	if err != nil {
-		return false, fmt.Errorf("failed to take screenshot for %s: %w", operationType, err)
-	}
-	defer func() {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-	}()
-
-	// Use training data from context, fall back to default if not provided
-	trainingDataPath := e.context.TrainingData
-	if trainingDataPath == "" {
-		trainingDataPath = qmp.GetDefaultTrainingDataPath()
-		logger.Debug("Using default training data", "operation", operationType, "path", trainingDataPath)
+	// Create OCR capture configuration
+	captureConfig := &ocr.CaptureConfig{
+		TrainingDataPath: e.context.TrainingData,
+		Columns:          160, // TODO: Make configurable from context
+		Rows:             50,  // TODO: Make configurable from context
+		CropEnabled:      false,
+		Prefix:           fmt.Sprintf("script2-%s", operationType),
 	}
 
-	width := 160 // TODO: Make configurable from context
-	height := 50 // TODO: Make configurable from context
-
-	// Process the screenshot with OCR
-	results, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, width, height)
-	if err != nil {
-		return false, fmt.Errorf("OCR processing failed for %s: %w", operationType, err)
+	// Use default path if training data not specified
+	if captureConfig.TrainingDataPath == "" {
+		captureConfig.TrainingDataPath = qmp.GetDefaultTrainingDataPath()
+		logger.Debug("Using default training data", "operation", operationType, "path", captureConfig.TrainingDataPath)
 	}
+
+	// Create OCR capture instance
+	ocrCapture := ocr.NewOCRCapture(captureConfig, TakeTemporaryScreenshot)
+
+	// Capture OCR using unified utility
+	captureResult := ocrCapture.Capture(e.context.Client)
+	if captureResult.Error != nil {
+		return false, fmt.Errorf("OCR capture failed for %s: %w", operationType, captureResult.Error)
+	}
+
+	results := captureResult.Result
 
 	// Update debugger with OCR results and watch progress
 	if e.debugger != nil && e.debugger.IsEnabled() {
@@ -788,14 +771,18 @@ func findDifferentLines(previous, current []string, logger *logging.ContextualLo
 	}
 
 	// Try to detect console scrolling by finding matching content offset
-	scrollOffset := detectScrollOffset(previous, current)
+	scrollOffset := detectScrollOffset(previous, current, logger)
 
 	// Debug logging for scroll detection
-	if scrollOffset != 0 {
-		logger.Debug("Console scroll detected",
-			"scroll_offset", scrollOffset,
-			"previous_lines", len(previous),
-			"current_lines", len(current))
+	logger.Debug("OCR diff analysis starting",
+		"previous_lines", len(previous),
+		"current_lines", len(current),
+		"scroll_offset", scrollOffset)
+
+	if len(previous) <= 10 && len(current) <= 10 {
+		// Log actual content for small screens to debug
+		logger.Debug("Previous OCR content", "lines", previous)
+		logger.Debug("Current OCR content", "lines", current)
 	}
 
 	var diffLines []string
@@ -815,15 +802,27 @@ func findDifferentLines(previous, current []string, logger *logging.ContextualLo
 
 			// Check if this line is truly new vs just shifted content
 			if currentLine != prevLine {
+				logger.Debug("Line comparison",
+					"line_index", i,
+					"current_line", currentLine,
+					"prev_line", prevLine,
+					"scroll_offset", scrollOffset)
+
 				// Check for partial line changes (e.g., "e" -> "ef")
 				if strings.HasPrefix(currentLine, prevLine) && len(currentLine) > len(prevLine) {
 					// Line was extended - this is new content
+					logger.Debug("Line extended - flagging as new", "line", currentLine)
 					diffLines = append(diffLines, currentLine)
 				} else if !containsLine(previous, currentLine) {
 					// Completely new line that didn't exist before
+					logger.Debug("New line detected - flagging as new", "line", currentLine)
 					diffLines = append(diffLines, currentLine)
+				} else {
+					logger.Debug("Line exists in previous - skipping as scrolled content", "line", currentLine)
 				}
 				// If line exists elsewhere in previous, it's just scrolled content - don't flag as new
+			} else {
+				logger.Debug("Line unchanged", "line", currentLine)
 			}
 		} else {
 			// Line index is beyond previous screen - this is new content at bottom
@@ -843,7 +842,7 @@ func findDifferentLines(previous, current []string, logger *logging.ContextualLo
 }
 
 // detectScrollOffset tries to detect how many lines the console content has scrolled
-func detectScrollOffset(previous, current []string) int {
+func detectScrollOffset(previous, current []string, logger *logging.ContextualLogger) int {
 	if len(previous) == 0 || len(current) == 0 {
 		return 0
 	}
@@ -859,9 +858,18 @@ func detectScrollOffset(previous, current []string) int {
 			if currentLine == prevLine {
 				// Found a match - calculate offset
 				offset := j - i
+				logger.Debug("Potential scroll offset found",
+					"current_line_idx", i,
+					"prev_line_idx", j,
+					"offset", offset,
+					"line_content", currentLine)
+
 				// Validate this offset makes sense by checking next few lines
 				if validateScrollOffset(previous, current, offset, i) {
+					logger.Debug("Scroll offset validated", "offset", offset)
 					return offset
+				} else {
+					logger.Debug("Scroll offset validation failed", "offset", offset)
 				}
 			}
 		}
@@ -906,60 +914,7 @@ func containsLine(lines []string, target string) bool {
 	return false
 }
 
-// mapKeyName maps script2 key names to QMP key names
-func mapKeyName(scriptKey string) string {
-	keyMap := map[string]string{
-		"enter":     "ret",
-		"tab":       "tab",
-		"space":     "spc",
-		"escape":    "esc",
-		"backspace": "backspace",
-		"delete":    "delete",
-		"up":        "up",
-		"down":      "down",
-		"left":      "left",
-		"right":     "right",
-		"home":      "home",
-		"end":       "end",
-		"page_up":   "pgup",
-		"page_down": "pgdn",
-	}
-
-	// Handle function keys
-	if strings.HasPrefix(scriptKey, "f") && len(scriptKey) >= 2 {
-		return scriptKey // f1, f2, etc. are the same
-	}
-
-	// Handle ctrl+key combinations
-	if strings.HasPrefix(scriptKey, "ctrl+") && len(scriptKey) == 6 {
-		key := scriptKey[5:] // Extract the single character
-		return "ctrl-" + key
-	}
-
-	// Handle alt+key combinations
-	if strings.HasPrefix(scriptKey, "alt+") && len(scriptKey) == 5 {
-		key := scriptKey[4:] // Extract the single character
-		return "alt-" + key
-	}
-
-	// Handle shift+key combinations
-	if strings.HasPrefix(scriptKey, "shift+") && len(scriptKey) == 7 {
-		key := scriptKey[6:] // Extract the single character
-		return "shift-" + key
-	}
-
-	// Look up in the map
-	if qmpKey, exists := keyMap[scriptKey]; exists {
-		return qmpKey
-	}
-
-	return "" // Unsupported key
-}
-
-// getKeyDelay returns the key delay (TODO: make configurable)
-func getKeyDelay() time.Duration {
-	return 50 * time.Millisecond
-}
+// mapKeyName and getKeyDelay functions moved to execution_mode.go
 
 // executeRetry executes a retry block with specified count
 func (e *Executor) executeRetry(directive *Directive, logger *logging.ContextualLogger) error {
@@ -1387,6 +1342,17 @@ func (e *Executor) executeFunctionCall(directive *Directive, logger *logging.Con
 		e.context.Variables = originalVariables
 	}()
 
+	// Check if we should step over this function (execute without debugging inside)
+	stepOverFunction := false
+	if e.debugger != nil && e.debugger.IsEnabled() {
+		// Check if the last debug action was StepOver
+		if e.debugger.IsStepOverMode() {
+			stepOverFunction = true
+			logger.Debug("Step over mode: executing function without step-into debugging", "function", functionName)
+			logging.UserInfof("⏭️ Step Over: Executing function '%s' without stepping inside", functionName)
+		}
+	}
+
 	// Execute function body
 	logger.Info("Executing function body", "name", functionName, "lines", len(function.Lines))
 
@@ -1396,6 +1362,31 @@ func (e *Executor) executeFunctionCall(directive *Directive, logger *logging.Con
 			"line_number", line.LineNumber,
 			"type", line.Type.String(),
 			"content", line.Content)
+
+		// Handle debugging for function body lines (step-into functionality)
+		// Skip debugging inside function if we're in step-over mode
+		if e.debugger != nil && e.debugger.IsEnabled() && !stepOverFunction {
+			// Check if debugger should break on this line inside the function
+			if e.debugger.ShouldBreak(line.LineNumber, line) {
+				action, err := e.debugger.HandleBreak(line.LineNumber, line)
+				if err != nil {
+					logger.Error("Debugger error in function", "function", functionName, "line", line.LineNumber, "error", err)
+					return fmt.Errorf("debugger error in function '%s' line %d: %w", functionName, line.LineNumber, err)
+				}
+
+				// Handle debug actions inside function
+				switch action {
+				case DebugActionStop:
+					logger.Info("Execution stopped by debugger inside function", "function", functionName)
+					return fmt.Errorf("execution stopped by debugger in function '%s'", functionName)
+				case DebugActionContinue, DebugActionStep:
+					// Continue with function execution (step-into behavior)
+				case DebugActionStepOver:
+					// For StepOver inside function, continue normally
+					// Note: StepOver behavior is handled at the function call level, not inside functions
+				}
+			}
+		}
 
 		if err := e.executeLine(line, logger); err != nil {
 			// Check if this is a return directive
@@ -1702,16 +1693,8 @@ func (e *Executor) executeSet(directive *Directive, logger *logging.ContextualLo
 		expandedValue = varValue
 	}
 
-	logger.Info("Setting variable",
-		"directive", "set",
-		"name", varName,
-		"value", expandedValue)
-	logging.UserInfof("📝 Setting variable %s=\"%s\"", varName, expandedValue)
-
-	// Set the variable in the context
-	e.context.Variables.Set(varName, expandedValue)
-
-	return nil
+	// Use execution mode to handle the variable assignment
+	return e.executionMode.SetVariable(varName, expandedValue, e.context.Variables, logger)
 }
 
 // simulateDirectiveExecution provides detailed dry-run feedback for directives
@@ -1773,30 +1756,35 @@ func (e *Executor) simulateDirectiveExecution(directive *Directive, logger *logg
 		if e.script != nil {
 			if function, exists := e.script.Functions[directive.FunctionName]; exists {
 				logging.UserInfof("    🔍 [DRY-RUN] Function body simulation (%d lines):", len(function.Lines))
+
+				// Create function variable expander once for the entire function simulation
+				localVars := make(map[string]string)
+				for i, arg := range directive.FunctionArgs {
+					// Expand the argument first
+					expandedArg, err := e.context.Variables.Expand(arg)
+					if err != nil {
+						logger.Warn("Variable expansion failed in function arg simulation", "error", err, "arg", arg)
+						expandedArg = arg
+					}
+					localVars[fmt.Sprintf("%d", i+1)] = expandedArg
+				}
+
+				callContext := &FunctionCallContext{
+					FunctionName: directive.FunctionName,
+					Parameters:   directive.FunctionArgs,
+					LocalVars:    localVars,
+				}
+				functionVariables := e.createFunctionVariableExpander(callContext)
+
+				// Save original variables and use function variables for simulation
+				originalVariables := e.context.Variables
+				e.context.Variables = functionVariables
+
 				for _, line := range function.Lines {
 					if line.Type == DirectiveLine && line.Directive != nil {
-						// Recursively simulate directives in function body
+						// Recursively simulate directives in function body with function parameters available
 						e.simulateDirectiveExecution(line.Directive, logger)
 					} else if line.Type == TextLine {
-						// Create function variable expander for proper simulation
-						localVars := make(map[string]string)
-						for i, arg := range directive.FunctionArgs {
-							// Expand the argument first
-							expandedArg, err := e.context.Variables.Expand(arg)
-							if err != nil {
-								logger.Warn("Variable expansion failed in function arg simulation", "error", err, "arg", arg)
-								expandedArg = arg
-							}
-							localVars[fmt.Sprintf("%d", i+1)] = expandedArg
-						}
-
-						callContext := &FunctionCallContext{
-							FunctionName: directive.FunctionName,
-							Parameters:   directive.FunctionArgs,
-							LocalVars:    localVars,
-						}
-						functionVariables := e.createFunctionVariableExpander(callContext)
-
 						// Expand variables with function parameters
 						expandedText, err := functionVariables.Expand(line.Content)
 						if err != nil {
@@ -1806,6 +1794,9 @@ func (e *Executor) simulateDirectiveExecution(directive *Directive, logger *logg
 						logging.UserInfof("       📝 Would type: %s", expandedText)
 					}
 				}
+
+				// Restore original variables
+				e.context.Variables = originalVariables
 			} else {
 				logging.UserInfof("    ⚠️ [DRY-RUN] Function '%s' not found", directive.FunctionName)
 			}

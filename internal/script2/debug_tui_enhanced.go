@@ -131,6 +131,9 @@ type enhancedDebugKeyMap struct {
 	// Performance monitoring
 	PerfView       key.Binding     // Performance view
 	PerfClear      key.Binding     // Clear performance log
+
+	// Help
+	Help           key.Binding     // Show help view
 }
 
 // EnhancedDebugKeyMap returns enhanced key bindings
@@ -155,6 +158,9 @@ func EnhancedDebugKeyMap() enhancedDebugKeyMap {
 		// Performance
 		PerfView:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "performance")),
 		PerfClear:      key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "clear perf")),
+
+		// Help
+		Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show help")),
 	}
 }
 
@@ -185,6 +191,8 @@ func (t *EnhancedDebugTUI) InitialModel() tea.Model {
 
 // Init initializes the enhanced model
 func (m *enhancedDebugTUIModel) Init() tea.Cmd {
+	// Initialize viewport content on startup
+	m.updateViewportContent()
 	return textinput.Blink
 }
 
@@ -256,19 +264,31 @@ type enhancedExportMsg struct {
 // handleEnhancedNormalMode handles key presses with enhanced OCR features
 func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	// Original debug controls
+	// Original debug controls - only quit on explicit stop/quit
 	case key.Matches(msg, m.keys.Continue):
 		m.lastAction = DebugActionContinue
-		return m, tea.Quit
+		m.debugger.GetState().StepMode = false  // Continue without stepping
+		return m, tea.Quit  // Execute next statement and quit to continue execution
 	case key.Matches(msg, m.keys.Step):
 		m.lastAction = DebugActionStep
-		return m, tea.Quit
+		m.debugger.GetState().StepMode = true   // Enable step mode
+		return m, tea.Quit  // Execute next statement and quit to continue execution
+	case key.Matches(msg, m.keys.StepOver):
+		m.lastAction = DebugActionStepOver
+		m.debugger.GetState().StepMode = true   // Enable step mode
+		return m, tea.Quit  // Execute next statement (step over) and quit to continue execution
 	case key.Matches(msg, m.keys.Stop):
 		m.lastAction = DebugActionStop
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Quit):
 		m.lastAction = DebugActionStop
 		return m, tea.Quit
+
+	// Help view
+	case key.Matches(msg, m.keys.Help):
+		m.currentView = enhancedViewHelp
+		m.updateViewportContent()
+		return m, nil
 
 	// Enhanced OCR controls
 	case key.Matches(msg, m.keys.OCRFullView):
@@ -387,6 +407,12 @@ func (m *enhancedDebugTUIModel) handleEnhancedNormalMode(msg tea.KeyMsg) (tea.Mo
 		m.inputMode = true
 		m.textInput.Focus()
 		m.textInput.SetValue("")
+
+	// Enter key as alias for Continue (as documented in help)
+	case msg.Type == tea.KeyEnter:
+		m.lastAction = DebugActionContinue
+		m.debugger.GetState().StepMode = false  // Continue without stepping
+		return m, tea.Quit
 	}
 
 	return m, nil
@@ -534,7 +560,24 @@ func (m *enhancedDebugTUIModel) renderEnhancedScriptView() string {
 	state := m.debugger.GetState()
 	script := m.debugger.GetScript()
 
+	// Debug logging for TUI rendering
+	m.debugger.logger.Debug("TUI rendering script view",
+		"current_line", state.CurrentLine,
+		"step_mode", state.StepMode,
+		"script_lines", len(script.Lines))
+
 	content.WriteString(headerStyle.Render("📜 ENHANCED SCRIPT VIEW") + "\n\n")
+
+	// Check if script is loaded
+	if script == nil {
+		content.WriteString("⚠️ No script loaded\n")
+		return content.String()
+	}
+
+	if len(script.Lines) == 0 {
+		content.WriteString("⚠️ Script contains no lines\n")
+		return content.String()
+	}
 
 	// OCR status integration
 	if m.ocrState.CurrentOCR != nil {
@@ -548,19 +591,79 @@ func (m *enhancedDebugTUIModel) renderEnhancedScriptView() string {
 		content.WriteString("\n")
 	}
 
+	// Check if we're currently inside a function
+	currentFunction := m.getCurrentExecutingFunction(state)
+	var linesToShow []ParsedLine
+	var lineNumberOffset int
+
+	if currentFunction != nil {
+		// Show function context instead of main script
+		content.WriteString(fmt.Sprintf("🔧 INSIDE FUNCTION: %s\n", currentFunction.FunctionName))
+		content.WriteString(fmt.Sprintf("📞 Called from line: %d\n", currentFunction.CallLine))
+		content.WriteString(fmt.Sprintf("📋 Parameters: [%s]\n\n", strings.Join(currentFunction.Parameters, ", ")))
+
+		// Get function definition from script
+		if function, exists := script.Functions[currentFunction.FunctionName]; exists {
+			linesToShow = function.Lines
+			lineNumberOffset = function.LineStart - 1 // Adjust for function line numbering
+		} else {
+			linesToShow = script.Lines // Fallback to main script
+		}
+	} else {
+		// Show main script
+		linesToShow = script.Lines
+		lineNumberOffset = 0
+	}
+
 	// Enhanced script rendering with current line highlighting
-	for i, line := range script.Lines {
-		lineNumber := i + 1
+	for i, line := range linesToShow {
+		lineNumber := i + 1 + lineNumberOffset
 		prefix := fmt.Sprintf("%3d", lineNumber)
+
+		// Debug: Log every line being rendered
+		if i < 5 { // Only log first 5 lines to avoid spam
+			m.debugger.logger.Debug("Rendering line",
+				"index", i,
+				"display_line", lineNumber,
+				"original_line", line.LineNumber,
+				"content", line.Content,
+				"type", line.Type.String())
+		}
 
 		// Style the line based on execution state
 		var lineStyle lipgloss.Style
 		var marker string
 
-		if lineNumber == state.CurrentLine {
+		// Adjust current line comparison for function context
+		var isCurrentLine bool
+		if currentFunction != nil {
+			// Inside function: state.CurrentLine is the function's line number
+			// Compare directly with the line's original number
+			isCurrentLine = line.LineNumber == state.CurrentLine
+			// Debug logging for function context
+			m.debugger.logger.Debug("Function line comparison",
+				"function", currentFunction.FunctionName,
+				"line_in_function", line.LineNumber,
+				"state_current_line", state.CurrentLine,
+				"display_line", lineNumber,
+				"is_current", isCurrentLine)
+		} else {
+			// Main script: current line is absolute
+			isCurrentLine = lineNumber == state.CurrentLine
+			// Debug logging for main script
+			m.debugger.logger.Debug("Main script line comparison",
+				"display_line", lineNumber,
+				"state_current_line", state.CurrentLine,
+				"line_original", line.LineNumber,
+				"is_current", isCurrentLine)
+		}
+
+		if isCurrentLine {
 			// Current execution line
 			lineStyle = successStyle.Copy().Background(lipgloss.Color("#2d3748"))
 			marker = "►"
+			// Auto-scroll to keep current line visible
+			m.ensureCurrentLineVisible(i, len(linesToShow))
 		} else if state.Breakpoints[lineNumber] {
 			// Breakpoint line
 			lineStyle = errorStyle.Copy()
@@ -1003,7 +1106,7 @@ func (m *enhancedDebugTUIModel) View() string {
 	if m.ocrState.ShowDiff {
 		footer += "🔄 Diff ON • "
 	}
-	footer += "Press 'h' for help"
+	footer += "Press '?' for help"
 
 	content.WriteString("\n" + footerStyle.Render(footer))
 
@@ -1120,5 +1223,57 @@ func (m *enhancedDebugTUIModel) highlightLine(lineNum int) {
 			targetOffset = 0
 		}
 		m.viewport.SetYOffset(targetOffset)
+	}
+}
+
+// getCurrentExecutingFunction returns the current function context if execution is inside a function
+func (m *enhancedDebugTUIModel) getCurrentExecutingFunction(state *DebugState) *FunctionCallContext {
+	if m.debugger == nil || m.debugger.executor == nil || m.debugger.executor.context == nil {
+		return nil
+	}
+
+	// Get the function stack from the executor
+	functionStack := m.debugger.executor.context.FunctionStack
+	if len(functionStack) == 0 {
+		return nil
+	}
+
+	// Return the top of the function stack (current function)
+	return functionStack[len(functionStack)-1]
+}
+
+// ensureCurrentLineVisible scrolls the viewport to keep the current execution line visible
+func (m *enhancedDebugTUIModel) ensureCurrentLineVisible(currentLineIndex int, totalLines int) {
+	if m.currentView != enhancedViewScript {
+		return
+	}
+
+	viewportHeight := m.viewport.Height
+	if viewportHeight <= 0 {
+		return
+	}
+
+	currentOffset := m.viewport.YOffset
+
+	// Calculate if current line is visible in viewport
+	linePosition := currentLineIndex
+	viewportStart := currentOffset
+	viewportEnd := currentOffset + viewportHeight - 1
+
+	// Auto-scroll to center the current line if it's not visible
+	if linePosition < viewportStart || linePosition > viewportEnd {
+		// Center the current line in the viewport
+		newOffset := linePosition - viewportHeight/2
+		if newOffset < 0 {
+			newOffset = 0
+		}
+		if newOffset > totalLines-viewportHeight {
+			newOffset = totalLines - viewportHeight
+		}
+		if newOffset < 0 {
+			newOffset = 0
+		}
+
+		m.viewport.SetYOffset(newOffset)
 	}
 }

@@ -1,0 +1,415 @@
+{
+  "name": "QMP Script2 Rainbow",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#0a0a0f",
+    "editor.foreground": "#e0e0ff",
+    "editorLineNumber.foreground": "#666699",
+    "editorLineNumber.activeForeground": "#9999ff",
+    "editor.selectionBackground": "#2a2a4f",
+    "editor.inactiveSelectionBackground": "#1a1a3f",
+    "editorCursor.foreground": "#ff66ff",
+    "editor.lineHighlightBackground": "#151520"
+  },
+  "tokenColors": [
+    {
+      "name": "Comments",
+      "scope": "comment",
+      "settings": {
+        "foreground": "#888888",
+        "fontStyle": "italic"
+      }
+    },
+    {
+      "name": "Function Keywords - Vibrant",
+      "scope": [
+        "storage.type.function.keyword.vibrant.qmp-script2",
+        "storage.type.function.end.keyword.vibrant.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ff3366",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Function Names - Bright",
+      "scope": [
+        "entity.name.function.definition.bright.qmp-script2",
+        "entity.name.function.call.brilliant.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#66ffcc",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Switch Keywords - Neon",
+      "scope": [
+        "keyword.control.switch.neon.qmp-script2",
+        "keyword.control.switch.end.neon.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ff9933",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Conditional Keywords - Rainbow",
+      "scope": [
+        "keyword.control.conditional.rainbow.qmp-script2",
+        "keyword.control.conditional.end.rainbow.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#cc66ff",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Loop Keywords - Cosmic",
+      "scope": [
+        "keyword.control.loop.while.cosmic.qmp-script2",
+        "keyword.control.loop.end.cosmic.qmp-script2",
+        "keyword.control.loop.vibrant.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#33ccff",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Case Keywords - Holographic",
+      "scope": [
+        "keyword.control.case.holographic.qmp-script2",
+        "keyword.control.case.end.holographic.qmp-script2",
+        "keyword.control.default.spectrum.qmp-script2",
+        "keyword.control.default.end.spectrum.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ffcc33",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Else Keywords - Magenta",
+      "scope": "keyword.control.conditional.else.magenta.qmp-script2",
+      "settings": {
+        "foreground": "#ff3399",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Navigation Keys - Vivid",
+      "scope": "support.function.key.navigation.vivid.qmp-script2",
+      "settings": {
+        "foreground": "#99ff66"
+      }
+    },
+    {
+      "name": "Modifier Keys - Electric",
+      "scope": "support.function.key.modifier.name.electric.qmp-script2",
+      "settings": {
+        "foreground": "#ff6666"
+      }
+    },
+    {
+      "name": "Modifier Separator - Neon",
+      "scope": "punctuation.separator.modifier.neon.qmp-script2",
+      "settings": {
+        "foreground": "#66ffff"
+      }
+    },
+    {
+      "name": "Modifier Keys - Blazing",
+      "scope": "support.function.key.modifier.key.blazing.qmp-script2",
+      "settings": {
+        "foreground": "#ffff66"
+      }
+    },
+    {
+      "name": "Function Keys - Radiant",
+      "scope": "support.function.key.function.radiant.qmp-script2",
+      "settings": {
+        "foreground": "#ff99cc"
+      }
+    },
+    {
+      "name": "Watch Keywords - Luminous",
+      "scope": "keyword.control.watch.luminous.qmp-script2",
+      "settings": {
+        "foreground": "#ccff99",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Console Functions - Technicolor",
+      "scope": "support.function.system.console.technicolor.qmp-script2",
+      "settings": {
+        "foreground": "#ff9966"
+      }
+    },
+    {
+      "name": "Wait Functions - Phosphorescent",
+      "scope": "support.function.timing.wait.phosphorescent.qmp-script2",
+      "settings": {
+        "foreground": "#66cc99"
+      }
+    },
+    {
+      "name": "Exit Keywords - Crimson",
+      "scope": "keyword.control.flow.exit.crimson.qmp-script2",
+      "settings": {
+        "foreground": "#ff3333",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Return Keywords - Emerald",
+      "scope": "keyword.control.flow.return.emerald.qmp-script2",
+      "settings": {
+        "foreground": "#33ff99",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Break Keywords - Amber",
+      "scope": "keyword.control.debug.break.amber.qmp-script2",
+      "settings": {
+        "foreground": "#ffcc00",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Include Keywords - Sapphire",
+      "scope": "keyword.control.import.sapphire.qmp-script2",
+      "settings": {
+        "foreground": "#3366ff",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Screenshot Functions - Violet",
+      "scope": "support.function.debug.screenshot.violet.qmp-script2",
+      "settings": {
+        "foreground": "#9966ff"
+      }
+    },
+    {
+      "name": "Set Keywords - Pearlescent",
+      "scope": "keyword.control.variable.set.pearlescent.qmp-script2",
+      "settings": {
+        "foreground": "#ffccff",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Call Keywords - Stellar",
+      "scope": "keyword.control.call.stellar.qmp-script2",
+      "settings": {
+        "foreground": "#ccccff",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Search Strings - Iridescent",
+      "scope": [
+        "string.quoted.double.search.iridescent.qmp-script2",
+        "string.quoted.double.search.glowing.qmp-script2",
+        "string.quoted.double.search.aurora.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#99ffcc"
+      }
+    },
+    {
+      "name": "Pattern Strings - Prismatic",
+      "scope": "string.quoted.double.pattern.prismatic.qmp-script2",
+      "settings": {
+        "foreground": "#ffcc99"
+      }
+    },
+    {
+      "name": "Filename Strings - Turquoise/Coral",
+      "scope": [
+        "string.quoted.double.filename.turquoise.qmp-script2",
+        "string.quoted.double.filename.coral.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#66ffcc"
+      }
+    },
+    {
+      "name": "Value Strings - Aqua",
+      "scope": "string.quoted.double.value.aqua.qmp-script2",
+      "settings": {
+        "foreground": "#99ccff"
+      }
+    },
+    {
+      "name": "String Quotes - Luminescent",
+      "scope": [
+        "punctuation.definition.string.begin.luminescent.qmp-script2",
+        "punctuation.definition.string.end.luminescent.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ccffcc"
+      }
+    },
+    {
+      "name": "Escape Characters - Brilliant",
+      "scope": "constant.character.escape.brilliant.qmp-script2",
+      "settings": {
+        "foreground": "#ffff99"
+      }
+    },
+    {
+      "name": "Placeholders - Rainbow",
+      "scope": "support.constant.placeholder.rainbow.qmp-script2",
+      "settings": {
+        "foreground": "#ff99ff"
+      }
+    },
+    {
+      "name": "Variable Expansion - Complex Multicolor",
+      "scope": "variable.other.expansion.complex.multicolor.qmp-script2",
+      "settings": {
+        "foreground": "#ccffff"
+      }
+    },
+    {
+      "name": "Variable Braces - Electric/Neon",
+      "scope": [
+        "punctuation.definition.variable.begin.electric.qmp-script2",
+        "punctuation.definition.variable.end.electric.qmp-script2",
+        "punctuation.definition.variable.begin.neon.qmp-script2",
+        "punctuation.definition.variable.end.neon.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ff6699"
+      }
+    },
+    {
+      "name": "Variable Names - Cyan/Lime/Pink/Purple",
+      "scope": [
+        "variable.other.readwrite.name.cyan.qmp-script2",
+        "variable.other.readwrite.name.lime.qmp-script2",
+        "variable.other.readwrite.name.pink.qmp-script2",
+        "variable.other.readwrite.name.purple.qmp-script2",
+        "variable.other.assignment.name.orange.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#66ffaa"
+      }
+    },
+    {
+      "name": "Variable Dollar Sign - Hot",
+      "scope": "punctuation.definition.variable.dollar.hot.qmp-script2",
+      "settings": {
+        "foreground": "#ff3366"
+      }
+    },
+    {
+      "name": "Expansion Separators",
+      "scope": [
+        "punctuation.separator.expansion.magenta.qmp-script2",
+        "support.constant.expansion.yellow.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ffcc66"
+      }
+    },
+    {
+      "name": "Numbers - Glowing/Radiant",
+      "scope": [
+        "constant.numeric.value.glowing.qmp-script2",
+        "constant.numeric.integer.radiant.qmp-script2",
+        "constant.numeric.float.radiant.qmp-script2",
+        "constant.numeric.timeout.bright.qmp-script2",
+        "constant.numeric.timeout.fluorescent.qmp-script2",
+        "constant.numeric.timeout.blazing.qmp-script2",
+        "constant.numeric.timeout.laser.qmp-script2",
+        "constant.numeric.count.glowing.qmp-script2",
+        "constant.numeric.console.fluorescent.qmp-script2",
+        "constant.numeric.duration.incandescent.qmp-script2",
+        "constant.numeric.exitcode.warning.qmp-script2",
+        "constant.numeric.poll.bright.qmp-script2",
+        "constant.numeric.poll.laser.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ffaa33"
+      }
+    },
+    {
+      "name": "Time Units - Sparkly",
+      "scope": "support.constant.unit.time.sparkly.qmp-script2",
+      "settings": {
+        "foreground": "#99ff33"
+      }
+    },
+    {
+      "name": "Attributes - Electric",
+      "scope": [
+        "support.constant.attribute.timeout.electric.qmp-script2",
+        "support.constant.attribute.poll.electric.qmp-script2",
+        "keyword.other.poll.crystal.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#33ffaa"
+      }
+    },
+    {
+      "name": "Format Constants - Lime",
+      "scope": "support.constant.format.lime.qmp-script2",
+      "settings": {
+        "foreground": "#aaff33"
+      }
+    },
+    {
+      "name": "Assignment Operators - Golden/Blazing",
+      "scope": [
+        "punctuation.separator.assignment.golden.qmp-script2",
+        "punctuation.separator.assignment.blazing.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ffdd00"
+      }
+    },
+    {
+      "name": "Logical Operators - Brilliant",
+      "scope": "keyword.operator.logical.brilliant.qmp-script2",
+      "settings": {
+        "foreground": "#ff00ff"
+      }
+    },
+    {
+      "name": "Function Arguments - Plasma",
+      "scope": "meta.function.arguments.plasma.qmp-script2",
+      "settings": {
+        "foreground": "#ccaaff"
+      }
+    },
+    {
+      "name": "Tag Brackets",
+      "scope": [
+        "punctuation.definition.tag.begin.qmp-script2",
+        "punctuation.definition.tag.end.qmp-script2"
+      ],
+      "settings": {
+        "foreground": "#ffffff"
+      }
+    },
+    {
+      "name": "Escaped Directives - Muted",
+      "scope": "markup.raw.directive.muted.qmp-script2",
+      "settings": {
+        "foreground": "#666666"
+      }
+    },
+    {
+      "name": "Regular Strings",
+      "scope": "string.quoted.double.qmp-script2",
+      "settings": {
+        "foreground": "#99ddff"
+      }
+    }
+  ]
+}

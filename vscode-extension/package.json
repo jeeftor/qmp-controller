@@ -24,16 +24,30 @@
         ],
         "id": "qmp-script2"
       }
+    ],
+    "themes": [
+      {
+        "label": "QMP Script2 Rainbow",
+        "uiTheme": "vs-dark",
+        "path": "./themes/qmp-script2-rainbow-theme.json"
+      }
     ]
   },
   "description": "Syntax highlighting for QMP Script2 automation files",
   "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.60.0",
+    "typescript": "^5.0.0",
     "vsce": "^2.15.0"
   },
   "displayName": "QMP Script2 Syntax Highlighting",
   "engines": {
     "vscode": "^1.60.0"
   },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:qmp-script2"
+  ],
   "keywords": [
     "qmp",
     "script2",
@@ -49,9 +63,10 @@
     "url": "https://github.com/jeeftor/qmp-controller.git"
   },
   "scripts": {
-    "compile": "echo 'No compilation needed for grammar-only extension'",
-    "package": "vsce package",
-    "publish": "vsce publish"
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npm run compile && vsce package",
+    "publish": "npm run compile && vsce publish"
   },
-  "version": "0.0.2-8-g5e694b0-dev"
+  "version": "0.0.2-10-gd2c60cb-dev"
 }

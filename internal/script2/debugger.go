@@ -164,6 +164,11 @@ func (d *Debugger) IsEnabled() bool {
 	return d.enabled
 }
 
+// IsStepOverMode returns true if the last debug action was StepOver
+func (d *Debugger) IsStepOverMode() bool {
+	return d.state.LastAction == DebugActionStepOver
+}
+
 // ShouldBreak returns true if execution should break at the current line
 func (d *Debugger) ShouldBreak(lineNumber int, line ParsedLine) bool {
 	if !d.enabled {
@@ -186,6 +191,7 @@ func (d *Debugger) ShouldBreak(lineNumber int, line ParsedLine) bool {
 
 	// Break in step mode
 	if d.state.StepMode {
+		d.logger.Debug("Breaking due to step mode", "line", lineNumber, "step_mode", d.state.StepMode)
 		return true
 	}
 
@@ -612,23 +618,31 @@ func (d *Debugger) RefreshOCR() error {
 		return fmt.Errorf("no executor available for OCR refresh")
 	}
 
+	// Create OCR capture configuration
+	captureConfig := &ocr.CaptureConfig{
+		TrainingDataPath: d.executor.context.TrainingData,
+		Columns:          160,
+		Rows:             50,
+		CropEnabled:      false,
+		Prefix:           "debug-ocr-refresh",
+	}
+
+	// Use default path if training data not specified
+	if captureConfig.TrainingDataPath == "" {
+		captureConfig.TrainingDataPath = "/Users/jstein/.qmp_training_data.json" // TODO: Use proper default
+	}
+
+	// Create OCR capture instance
+	ocrCapture := ocr.NewOCRCapture(captureConfig, TakeTemporaryScreenshot)
+
 	// Handle dry-run mode with mock OCR data
 	if d.executor.context.DryRun {
 		d.logger.Info("Mock OCR refresh for dry-run mode")
-		mockResult := &ocr.OCRResult{
-			Text: []string{
-				"[DRY-RUN] Mock console output",
-				"user@server:~$ echo 'hello world'",
-				"hello world",
-				"user@server:~$ ls -la",
-				"total 12",
-				"drwxr-xr-x 2 user user 4096 Jan 01 12:00 .",
-				"drwxr-xr-x 3 user user 4096 Jan 01 12:00 ..",
-				"-rw-r--r-- 1 user user  220 Jan 01 12:00 .bashrc",
-				"user@server:~$ ",
-			},
+		result := ocrCapture.MockCapture()
+		if result.Error != nil {
+			return fmt.Errorf("mock OCR failed: %w", result.Error)
 		}
-		d.UpdateOCRResult(mockResult, "", false)
+		d.UpdateOCRResult(result.Result, "", false)
 		return nil
 	}
 
@@ -636,31 +650,14 @@ func (d *Debugger) RefreshOCR() error {
 		return fmt.Errorf("no client available for OCR refresh")
 	}
 
-	// Take temporary screenshot
-	tempFile, err := TakeTemporaryScreenshot(d.executor.context.Client, "debug-ocr-refresh")
-	if err != nil {
-		return fmt.Errorf("failed to take screenshot: %w", err)
-	}
-	defer func() {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-	}()
-
-	// Use training data from context
-	trainingDataPath := d.executor.context.TrainingData
-	if trainingDataPath == "" {
-		// Get default training data path
-		trainingDataPath = "/Users/jstein/.qmp_training_data.json" // TODO: Use proper default
-	}
-
-	// Process with OCR
-	result, err := ocr.ProcessScreenshotWithTrainingData(tempFile.Name(), trainingDataPath, 160, 50)
-	if err != nil {
-		return fmt.Errorf("OCR processing failed: %w", err)
+	// Capture OCR using unified utility
+	result := ocrCapture.Capture(d.executor.context.Client)
+	if result.Error != nil {
+		return fmt.Errorf("OCR capture failed: %w", result.Error)
 	}
 
 	// Update debug state
-	d.UpdateOCRResult(result, "", false)
+	d.UpdateOCRResult(result.Result, "", false)
 
 	return nil
 }

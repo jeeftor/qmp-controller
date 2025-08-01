@@ -267,21 +267,31 @@ func NewParser(variables *VariableExpander, debug bool) *Parser {
 
 // Executor handles script execution
 type Executor struct {
-	context     *ExecutionContext
-	parser      *Parser
-	script      *Script
-	debug       bool
-	debugger    *Debugger
-	lastOCRText []string // Stores the last OCR text result for diff comparison
+	context       *ExecutionContext
+	parser        *Parser
+	script        *Script
+	debug         bool
+	debugger      *Debugger
+	lastOCRText   []string // Stores the last OCR text result for diff comparison
+	executionMode ExecutionMode // Handles real vs dry-run execution
 }
 
 // NewExecutor creates a new script executor
 func NewExecutor(context *ExecutionContext, debug bool) *Executor {
-	return &Executor{
+	executor := &Executor{
 		context:     context,
 		debug:       debug,
 		lastOCRText: make([]string, 0), // Initialize empty slice for OCR text comparison
 	}
+
+	// Initialize execution mode based on context
+	if context.DryRun {
+		executor.executionMode = NewDryRunExecution(context)
+	} else {
+		executor.executionMode = NewRealExecution(context.Client, context, context.TrainingData)
+	}
+
+	return executor
 }
 
 // SetParser sets the parser for the executor (needed for validation)

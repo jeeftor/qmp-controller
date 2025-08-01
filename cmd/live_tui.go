@@ -9,21 +9,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jeeftor/qmp-controller/internal/qmp"
 	"github.com/jeeftor/qmp-controller/internal/styles"
+	"github.com/jeeftor/qmp-controller/internal/tui"
 )
 
 // LiveTUIModel represents the Bubble Tea model for live mode
 type LiveTUIModel struct {
-	vmid      string
-	client    *qmp.Client
-	history   []string
-	startTime time.Time
-	width     int
-	height    int
-	quitting  bool
+	*tui.BaseTUIModel
+	history     []string
+	keyHandler  *tui.KeyHandler
+	renderer    *tui.TUIRenderer
+	logManager  *tui.LogManager
 }
-
-// TickMsg is sent periodically to update the uptime
-type TickMsg time.Time
 
 // KeySentMsg is sent when a key is successfully sent to the VM
 type KeySentMsg struct {
@@ -33,12 +29,14 @@ type KeySentMsg struct {
 
 // NewLiveTUIModel creates a new Bubble Tea model for live mode
 func NewLiveTUIModel(vmid string, client *qmp.Client) LiveTUIModel {
+	baseTUI := tui.NewBaseTUIModel(vmid, client)
+
 	return LiveTUIModel{
-		vmid:      vmid,
-		client:    client,
-		history:   make([]string, 0),
-		startTime: time.Now(),
-		quitting:  false,
+		BaseTUIModel: baseTUI,
+		history:      make([]string, 0),
+		keyHandler:   tui.NewKeyHandler(),
+		renderer:     tui.NewTUIRenderer(80, 24),
+		logManager:   tui.NewLogManager(50),
 	}
 }
 
@@ -54,44 +52,49 @@ var (
 
 // Init initializes the model
 func (m LiveTUIModel) Init() tea.Cmd {
-	return tea.Batch(
-		tea.EnterAltScreen,
-		tickCmd(),
-	)
-}
-
-// tickCmd returns a command that sends a tick message every second
-func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
-		return TickMsg(t)
-	})
+	return m.CommonInit()
 }
 
 // Update handles messages and updates the model
 func (m LiveTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.HandleWindowResize(msg)
+		m.renderer.UpdateDimensions(msg.Width, msg.Height)
 		return m, nil
 
+	case tui.TickMsg:
+		return m, m.TickCmd()
+
 	case tea.KeyMsg:
+		// Handle common keys first
+		if action, handled := m.keyHandler.HandleCommonKeys(msg); handled {
+			switch action {
+			case tui.KeyActionQuit:
+				return m, tea.Quit
+			case tui.KeyActionRefresh:
+				// Add refresh logic here if needed
+				return m, nil
+			}
+		}
+
+		// Handle live-mode specific keys
 		switch msg.String() {
 		case "ctrl+^", "ctrl+6":
-			m.quitting = true
 			return m, tea.Quit
 		default:
 			// Send the key to the VM
 			key := msg.String()
-			err := m.client.SendKey(key)
+			err := m.State.Client.SendKey(key)
 			success := err == nil
 
-			// Add to history
-			timestamp := time.Now().Format("15:04:05")
+			// Add to history using log manager
 			if success {
-				m.history = append(m.history, fmt.Sprintf("[%s] ✓ %s", timestamp, key))
+				m.logManager.Add(fmt.Sprintf("✓ %s", key), tui.LogLevelSuccess)
+				m.history = append(m.history, fmt.Sprintf("✓ %s", key))
 			} else {
-				m.history = append(m.history, fmt.Sprintf("[%s] ✗ %s (error: %v)", timestamp, key, err))
+				m.logManager.Add(fmt.Sprintf("✗ %s (error: %v)", key, err), tui.LogLevelError)
+				m.history = append(m.history, fmt.Sprintf("✗ %s (error: %v)", key, err))
 			}
 
 			// Keep only last 20 entries
@@ -102,10 +105,6 @@ func (m LiveTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-	case TickMsg:
-		// Continue ticking
-		return m, tickCmd()
-
 	default:
 		return m, nil
 	}
@@ -113,57 +112,49 @@ func (m LiveTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the TUI
 func (m LiveTUIModel) View() string {
-	if m.quitting {
+	if m.IsQuitting() {
 		return exitStyle.Render("Exited live keyboard mode\n")
 	}
 
 	var s strings.Builder
 
-	// Title
-	title := titleStyle.Render(fmt.Sprintf(" QMP Live Mode - VM %s ", m.vmid))
+	// Title using renderer
+	title := m.renderer.RenderTitle(fmt.Sprintf("QMP Live Mode - VM %s", m.State.VMID))
 	s.WriteString(title + "\n\n")
 
 	// Exit instructions
 	exitMsg := exitStyle.Render("Press Ctrl+^ (Ctrl+6) to exit")
 	s.WriteString(exitMsg + "\n")
 
-	// Status
-	uptime := time.Since(m.startTime).Truncate(time.Second)
-	status := statusStyle.Render(fmt.Sprintf("Connected for %v", uptime))
-	s.WriteString(status + "\n\n")
+	// Status using renderer
+	statusInfo := m.GetCommonStatus("Live Mode", "Connected", "", time.Time{})
+	statusLine := m.renderer.RenderStatus(statusInfo)
+	s.WriteString(statusLine + "\n\n")
 
 	// History
 	s.WriteString("Command History:\n")
 
 	if len(m.history) == 0 {
 		historyContent := "No commands sent yet...\nStart typing to send keys to the VM!"
-		historyBox := historyStyle.Width(m.width - 4).Render(historyContent)
+		width, _ := m.GetDimensions()
+		historyBox := historyStyle.Width(width - 4).Render(historyContent)
 		s.WriteString(historyBox)
 	} else {
-		// Show recent history
-		var historyLines []string
-		maxLines := m.height - 10 // Reserve space for header and footer
+		// Show recent history using renderer
+		width, height := m.GetDimensions()
+		maxLines := height - 10 // Reserve space for header and footer
 		if maxLines < 5 {
 			maxLines = 5
 		}
 
-		start := 0
+		recentHistory := m.history
 		if len(m.history) > maxLines {
-			start = len(m.history) - maxLines
+			recentHistory = m.history[len(m.history)-maxLines:]
 		}
 
-		for i := start; i < len(m.history); i++ {
-			entry := m.history[i]
-			// Highlight recent entries
-			if i >= len(m.history)-3 {
-				historyLines = append(historyLines, recentKeyStyle.Render("→ "+entry))
-			} else {
-				historyLines = append(historyLines, oldKeyStyle.Render("  "+entry))
-			}
-		}
-
+		historyLines := m.renderer.RenderList(recentHistory, false, -1)
 		historyContent := strings.Join(historyLines, "\n")
-		historyBox := historyStyle.Width(m.width - 4).Render(historyContent)
+		historyBox := historyStyle.Width(width - 4).Render(historyContent)
 		s.WriteString(historyBox)
 	}
 

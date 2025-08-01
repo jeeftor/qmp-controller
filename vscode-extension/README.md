@@ -68,13 +68,18 @@ The grammar is automatically synchronized with parser changes to ensure accuracy
 The following patterns were automatically extracted from the parser:
 
 
-#### Functions
-- **endFunctionRegex**: End function: end-function
-- **functionCallRegex**: Function call: call function_name args...
-- **functionDefRegex**: Function definition: function name
+#### Comments
+- **commentRegex**: Comment lines starting with #
 
-#### Keys
-- **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
+#### Conditionals
+- **elseRegex**: Else directive: else
+
+#### Debugging
+- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
+
+#### Directives
+- **directiveRegex**: Directive patterns: <something> but not \<something>
+- **escapedDirectiveRegex**: Escaped directive patterns: \<something>
 
 #### Loops
 - **repeatRegex**: Repeat directive: repeat 5
@@ -92,23 +97,14 @@ The following patterns were automatically extracted from the parser:
 - **setRegex**: Script2 pattern: setRegex
 - **switchRegex**: Script2 pattern: switchRegex
 
-#### Variables
-- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
-
-#### Comments
-- **commentRegex**: Comment lines starting with #
-
-#### Composition
-- **includeRegex**: Include directive: include "script.txt"
-
-#### Debugging
-- **screenshotRegex**: Screenshot directive: screenshot "filename.png"
-
 #### Structure
 - **emptyLineRegex**: Empty or whitespace-only lines
 
-#### Conditionals
-- **elseRegex**: Else directive: else
+#### Variables
+- **variableAssignmentRegex**: Variable assignment: USER=value or USER=${USER:-default}
+
+#### Composition
+- **includeRegex**: Include directive: include "script.txt"
 
 #### Control
 - **consoleRegex**: Console switching: console 2
@@ -116,9 +112,13 @@ The following patterns were automatically extracted from the parser:
 - **waitRegex**: Wait delay: wait 5s
 - **watchRegex**: Watch patterns: watch "text" 30s
 
-#### Directives
-- **directiveRegex**: Directive patterns: <something> but not \<something>
-- **escapedDirectiveRegex**: Escaped directive patterns: \<something>
+#### Functions
+- **endFunctionRegex**: End function: end-function
+- **functionCallRegex**: Function call: call function_name args...
+- **functionDefRegex**: Function definition: function name
+
+#### Keys
+- **keySequenceRegex**: Key sequence patterns: enter, tab, ctrl+c, etc.
 
 
 ## Development

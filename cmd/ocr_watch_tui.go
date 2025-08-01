@@ -20,6 +20,7 @@ type OCRWatchTUIModel struct {
 	vmid         string
 	config       *ocr.OCRConfig
 	outputFile   string
+	ocrCapture   *ocr.OCRCapture  // Unified OCR capture utility
 
 	// Watch state
 	baselineText     []string
@@ -44,17 +45,34 @@ type OCRWatchTUIModel struct {
 // OCR Watch TUI message types
 type OCRWatchTickMsg time.Time
 type OCRWatchRefreshMsg struct {
-	result  *OCRCaptureResult
+	result  *ocr.CaptureResult
 }
 type UserInputMsg struct{}
 
 // NewOCRWatchTUIModel creates a new OCR watch TUI model
 func NewOCRWatchTUIModel(client *qmp.Client, vmid string, config *ocr.OCRConfig, outputFile string, interval int) OCRWatchTUIModel {
+	// Create OCR capture configuration from OCRConfig
+	captureConfig := &ocr.CaptureConfig{
+		TrainingDataPath: config.TrainingDataPath,
+		Columns:          config.Columns,
+		Rows:             config.Rows,
+		CropEnabled:      config.CropEnabled,
+		CropStartRow:     config.CropStartRow,
+		CropEndRow:       config.CropEndRow,
+		CropStartCol:     config.CropStartCol,
+		CropEndCol:       config.CropEndCol,
+		Prefix:           "qmp-ocr-watch-tui",
+	}
+
+	// Create OCR capture instance
+	ocrCapture := ocr.NewOCRCapture(captureConfig, TakeTemporaryScreenshot)
+
 	return OCRWatchTUIModel{
 		client:          client,
 		vmid:            vmid,
 		config:          config,
 		outputFile:      outputFile,
+		ocrCapture:      ocrCapture,
 		refreshInterval: time.Duration(interval) * time.Second,
 		stateVersion:    1,
 		lastUserAction:  time.Now(),
@@ -101,7 +119,7 @@ func (m OCRWatchTUIModel) tickCmd() tea.Cmd {
 // performInitialOCR performs the initial OCR capture
 func (m OCRWatchTUIModel) performInitialOCR() tea.Cmd {
 	return func() tea.Msg {
-		result, _ := m.captureOCR()
+		result := m.ocrCapture.Capture(m.client)
 		return OCRWatchRefreshMsg{
 			result: result,
 		}
@@ -111,57 +129,11 @@ func (m OCRWatchTUIModel) performInitialOCR() tea.Cmd {
 // performOCRRefresh performs an OCR refresh
 func (m OCRWatchTUIModel) performOCRRefresh() tea.Cmd {
 	return func() tea.Msg {
-		result, _ := m.captureOCR()
+		result := m.ocrCapture.Capture(m.client)
 		return OCRWatchRefreshMsg{
 			result: result,
 		}
 	}
-}
-
-// OCRCaptureResult holds both text and bitmap data for color mode support
-type OCRCaptureResult struct {
-	Text    []string
-	Result  *ocr.OCRResult
-	Error   error
-}
-
-// captureOCR captures OCR from the VM and returns both text and full result for color support
-func (m OCRWatchTUIModel) captureOCR() (*OCRCaptureResult, error) {
-	// Take screenshot
-	tmpFile, err := TakeTemporaryScreenshot(m.client, "qmp-ocr-watch-tui")
-	if err != nil {
-		return &OCRCaptureResult{Error: fmt.Errorf("screenshot failed: %v", err)}, err
-	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
-
-	// Process OCR
-	var result *ocr.OCRResult
-	if m.config.CropEnabled {
-		result, err = ocr.ProcessScreenshotWithCropAndTrainingData(
-			tmpFile.Name(),
-			m.config.TrainingDataPath,
-			m.config.Columns,
-			m.config.Rows,
-			m.config.CropStartRow,
-			m.config.CropEndRow,
-			m.config.CropStartCol,
-			m.config.CropEndCol,
-		)
-	} else {
-		result, err = ocr.ProcessScreenshotWithTrainingData(
-			tmpFile.Name(),
-			m.config.TrainingDataPath,
-			m.config.Columns,
-			m.config.Rows,
-		)
-	}
-
-	if err != nil {
-		return &OCRCaptureResult{Error: fmt.Errorf("OCR processing failed: %v", err)}, err
-	}
-
-	return &OCRCaptureResult{Text: result.Text, Result: result}, nil
 }
 
 // Update handles messages and updates the model

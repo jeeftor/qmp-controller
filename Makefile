@@ -65,7 +65,7 @@ vscode-extension:
 
 vscode-uninstall:
 	@echo "🗑️  Uninstalling old VSCode extension..."
-	code --uninstall-extension qmp-controscrller.qmp-script2 || true
+	code --uninstall-extension qmp-controller.qmp-script2 || true
 	@echo "✅ Old extension uninstalled!"
 
 vscode-install: vscode-extension vscode-uninstall
@@ -108,13 +108,14 @@ jetbrains-clean:
 	docker rmi jetbrains-plugin-builder 2>/dev/null || true
 
 scp: clean vscode-extension build-amd
-	scp ./dist/qmp-controller-amd64 pve1:~/qmp
-	scp ./dist/qmp-controller-amd64 pve2:~/qmp
-	scp ./dist/qmp-controller-amd64 pve3:~/qmp
-	scp ./dist/qmp-controller-amd64 pve4:~/qmp
-	cp ./dist/qmp-controller-amd64  /Users/jstein/devel/n2cx/secureUSB/qmp &
-	cp ./vscode-extension/qmp-script2-*.vsix /Volumes/SecureUSB/dev/script2.vsix &
-	cp ./dist/qmp-controller-amd64  /Volumes/SecureUSB/dev/qmp	&
+	scp ./dist/qmp-controller-amd64 pve1:~/qmp &
+	scp ./dist/qmp-controller-amd64 pve2:~/qmp &
+	scp ./dist/qmp-controller-amd64 pve3:~/qmp &
+	scp ./dist/qmp-controller-amd64 pve4:~/qmp &
+
+	# Copy to dist direcotyr
+	cp ./vscode-extension/qmp-script2-*.vsix /Volumes/SecureUSB/dist/script2.vsix &
+	cp ./dist/qmp-controller-amd64  /Volumes/SecureUSB/dist/qmp	&
 	wait
 
 socat-tcp:
